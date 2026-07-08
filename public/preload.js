@@ -22,11 +22,19 @@
     const path = require("path");
     const { URL } = require("url");
     const {
+      AUTH_PLACEMENT_HEADER,
+      BALANCE_ROUTE,
+      DEFAULT_JSON_PATHS,
       REQUEST_TIMEOUT_MS,
-      buildBalanceUrl,
+      REQUEST_METHOD_GET,
+      buildProviderRequestConfig,
+      getDefaultAdvancedBodyText,
+      getDefaultAdvancedHeadersText,
+      getProviderTemplate,
       normalizeProviderInput,
       normalizeBodyForJson,
-      parseBalanceResponse,
+      normalizeTemplateId,
+      parseProviderBalanceResponse,
       safeErrorMessage,
       shouldRefreshProvider,
       createResponseErrorMessage
@@ -82,11 +90,30 @@
     function toRendererProvider(doc) {
       const api = requireUtools();
       const id = idFromDoc(doc);
+      const templateId = normalizeTemplateId(doc.templateId, doc.mode);
+      const template = getProviderTemplate(templateId);
 
       return {
         id,
         name: doc.name,
         baseUrl: doc.baseUrl,
+        templateId,
+        requestPath: doc.requestPath || template.requestPath || BALANCE_ROUTE,
+        requestMethod: doc.requestMethod || template.requestMethod || REQUEST_METHOD_GET,
+        authPlacement: doc.authPlacement || template.authPlacement || AUTH_PLACEMENT_HEADER,
+        requestHeaders:
+          doc.requestHeaders ||
+          template.requestHeaders ||
+          getDefaultAdvancedHeadersText(doc.authPlacement || AUTH_PLACEMENT_HEADER),
+        requestBody:
+          doc.requestBody ||
+          template.requestBody ||
+          getDefaultAdvancedBodyText(doc.authPlacement || AUTH_PLACEMENT_HEADER),
+        jsonPaths: {
+          ...DEFAULT_JSON_PATHS,
+          ...template.jsonPaths,
+          ...(doc.jsonPaths || {})
+        },
         refreshIntervalMinutes: doc.refreshIntervalMinutes,
         lastBalance: doc.lastBalance ?? null,
         lastLimit: doc.lastLimit ?? null,
@@ -137,25 +164,21 @@
       return new Error(createResponseErrorMessage(message, detail));
     }
 
-    function requestJson(url, apiKey, timeoutMs) {
+    function requestJson(config, timeoutMs) {
       return new Promise((resolve, reject) => {
-        const parsed = new URL(url);
+        const parsed = new URL(config.url);
         const client = parsed.protocol === "http:" ? http : https;
 
         const request = client.request(
           parsed,
           {
-            method: "GET",
-            headers: {
-              Authorization: `Bearer ${apiKey}`,
-              "User-Agent": "cc-switch/1.0",
-              Accept: "application/json"
-            }
+            method: config.method || "GET",
+            headers: config.headers || {}
           },
           (response) => {
             const chunks = [];
             const detail = {
-              url,
+              url: config.url,
               statusCode: response.statusCode,
               contentType: response.headers["content-type"],
               body: ""
@@ -187,6 +210,9 @@
         request.setTimeout(timeoutMs, () => {
           request.destroy(new Error("请求超时"));
         });
+        if (config.body) {
+          request.write(config.body);
+        }
         request.end();
       });
     }
@@ -231,6 +257,13 @@
         _id: providerDocId(id),
         name: normalized.name,
         baseUrl: normalized.baseUrl,
+        templateId: normalized.templateId,
+        requestPath: normalized.requestPath,
+        requestMethod: normalized.requestMethod,
+        authPlacement: normalized.authPlacement,
+        requestHeaders: normalized.requestHeaders,
+        requestBody: normalized.requestBody,
+        jsonPaths: normalized.jsonPaths,
         refreshIntervalMinutes: normalized.refreshIntervalMinutes,
         lastBalance: existing ? existing.lastBalance ?? null : null,
         lastLimit: existing ? existing.lastLimit ?? null : null,
@@ -252,6 +285,23 @@
       }
 
       return toRendererProvider(await getProviderDoc(id));
+    }
+
+    async function testProviderRequest(input) {
+      const api = requireUtools();
+      const id = input && input.id ? String(input.id) : "";
+      const normalized = normalizeProviderInput(input, {
+        isUpdate: Boolean(id),
+        requireJsonPaths: false
+      });
+      const apiKey = normalized.apiKey || (id ? api.dbCryptoStorage.getItem(apiKeyStorageKey(id)) : "");
+
+      if (!apiKey) {
+        throw new Error("请填写 API Key");
+      }
+
+      const config = buildProviderRequestConfig(normalized, apiKey);
+      return requestJson(config, REQUEST_TIMEOUT_MS);
     }
 
     async function deleteProvider(id) {
@@ -279,8 +329,9 @@
       }
 
       try {
-        const response = await requestJson(buildBalanceUrl(doc.baseUrl), apiKey, REQUEST_TIMEOUT_MS);
-        const extracted = parseBalanceResponse(response);
+        const config = buildProviderRequestConfig(toRendererProvider(doc), apiKey);
+        const response = await requestJson(config, REQUEST_TIMEOUT_MS);
+        const extracted = parseProviderBalanceResponse(response, toRendererProvider(doc).jsonPaths);
         const updatedDoc = await putProviderPatch(id, {
           lastBalance: extracted.remaining,
           lastLimit: extracted.limit,
@@ -386,6 +437,7 @@
       getSyncState,
       listProviders,
       saveProvider,
+      testProviderRequest,
       deleteProvider,
       refreshProvider,
       refreshDueProviders,

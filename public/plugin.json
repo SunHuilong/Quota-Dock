@@ -1,6 +1,6 @@
 {
   "pluginName": "Quota Dock - AI额度看板",
-  "description": "一款用于查询 AI 中转站额度的 uTools 插件。支持配置多个中转站的 Base URL 和 API Key，自动请求 /v1/usage 获取余额、已用额度、限额进度和下次重置时间。插件提供主窗口列表和浮窗模式，适合长期关注 API 额度消耗的用户。",
+  "description": "一款用于查询 AI 中转站额度的 uTools 插件。支持配置多个中转站的 Base URL、API Key 和额度查询模板，也可自定义请求与 JSON 字段映射。插件提供主窗口列表和浮窗模式，适合长期关注 API 额度消耗的用户。",
   "author": "Codex",
   "homepage": "",
   "version": "0.1.0",

@@ -28,6 +28,9 @@ function createUnavailableBridge(): QuotaBridge {
     saveProvider(_input: ProviderInput): Promise<QuotaProvider> {
       return fail();
     },
+    testProviderRequest(_input: ProviderInput): Promise<unknown> {
+      return fail();
+    },
     deleteProvider(_id: string): Promise<boolean> {
       return fail();
     },

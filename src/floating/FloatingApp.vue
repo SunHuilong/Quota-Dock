@@ -2,7 +2,7 @@
 import { AlertTriangle, CheckCircle2, Loader2, RefreshCw, WalletCards, X } from "@lucide/vue";
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import { getQuotaBridge } from "../shared/bridge";
-import { formatBalance, formatDateTime, formatDomain, formatQuotaValue, formatTime, providerStatus, quotaProgress } from "../shared/format";
+import { formatBalance, formatDateTime, formatQuotaValue, formatTime, providerStatus, quotaProgress } from "../shared/format";
 import type { QuotaProvider } from "../shared/types";
 
 const bridge = getQuotaBridge();
@@ -103,7 +103,6 @@ onBeforeUnmount(() => {
               {{ providerStatus(provider).text }}
             </span>
           </div>
-          <p>{{ formatDomain(provider.baseUrl) }}</p>
         </div>
         <div class="floating-balance">
           <strong>{{ formatBalance(provider) }}</strong>
