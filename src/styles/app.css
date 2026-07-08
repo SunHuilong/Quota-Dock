@@ -798,6 +798,45 @@ p {
   border-radius: 10px;
 }
 
+.template-config.collapsed {
+  gap: 0;
+}
+
+.template-config-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-height: 34px;
+  padding: 0;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 900;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.template-config-toggle span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.template-config-toggle svg {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.template-config-body {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
 .template-config .field {
   margin-bottom: 0;
 }

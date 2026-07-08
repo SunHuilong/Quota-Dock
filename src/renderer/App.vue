@@ -2,6 +2,8 @@
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Clock3,
   Cloud,
   CloudOff,
@@ -134,6 +136,7 @@ const showApiKey = ref(false);
 const errorMessage = ref("");
 const refreshingIds = ref<string[]>([]);
 const isProviderModalOpen = ref(false);
+const isTemplateConfigOpen = ref(false);
 const pendingDeleteProvider = ref<QuotaProvider | null>(null);
 const testingRequest = ref(false);
 const testResponse = ref<unknown | null>(null);
@@ -219,6 +222,7 @@ function applyTemplatePreset(templateId: TemplateId) {
   form.requestHeaders = template.requestHeaders;
   form.requestBody = template.requestBody;
   Object.assign(form.jsonPaths, createEmptyJsonPaths(), template.jsonPaths);
+  isTemplateConfigOpen.value = template.id === "custom";
   resetTestResult();
 }
 
@@ -238,6 +242,14 @@ function resetTestResult() {
   testResponse.value = null;
   testMessage.value = "";
   selectedJsonLeaf.value = null;
+}
+
+function isJsonPathRequired(key: JsonPathKey) {
+  if (key === "balance") {
+    return !form.jsonPaths.limit || !form.jsonPaths.used;
+  }
+
+  return (key === "limit" || key === "used") && !form.jsonPaths.balance;
 }
 
 function resetForm() {
@@ -278,6 +290,7 @@ function editProvider(provider: QuotaProvider) {
   form.requestHeaders = provider.requestHeaders || defaultHeadersForAuth(form.authPlacement);
   form.requestBody = provider.requestBody || defaultBodyForAuth(form.authPlacement);
   Object.assign(form.jsonPaths, createEmptyJsonPaths(), provider.jsonPaths || {});
+  isTemplateConfigOpen.value = form.templateId === "custom";
   form.refreshIntervalMinutes = provider.refreshIntervalMinutes;
   showApiKey.value = false;
   errorMessage.value = "";
@@ -750,119 +763,133 @@ onBeforeUnmount(() => {
             </div>
           </label>
 
-          <section class="template-config">
-            <label class="field">
-              <span>Path</span>
-              <input v-model.trim="form.requestPath" autocomplete="off" placeholder="/v1/usage" required />
-            </label>
+          <section class="template-config" :class="{ collapsed: !isTemplateConfigOpen }">
+            <button
+              class="template-config-toggle"
+              type="button"
+              :aria-expanded="isTemplateConfigOpen"
+              title="展开或收起路由与响应配置"
+              @click="isTemplateConfigOpen = !isTemplateConfigOpen"
+            >
+              <span>路由与响应配置</span>
+              <ChevronDown v-if="isTemplateConfigOpen" :size="17" />
+              <ChevronRight v-else :size="17" />
+            </button>
 
-            <div class="form-row two-columns">
-              <div class="field compact-field">
-                <span>请求方式</span>
-                <div class="segmented-control">
-                  <button
-                    class="segment-button"
-                    :class="{ active: form.requestMethod === 'GET' }"
-                    type="button"
-                    @click="setRequestMethod('GET')"
-                  >
-                    GET
-                  </button>
-                  <button
-                    class="segment-button"
-                    :class="{ active: form.requestMethod === 'POST' }"
-                    type="button"
-                    @click="setRequestMethod('POST')"
-                  >
-                    POST
-                  </button>
-                </div>
-              </div>
-
-              <div class="field compact-field">
-                <span>鉴权位置</span>
-                <div class="segmented-control">
-                  <button
-                    class="segment-button"
-                    :class="{ active: form.authPlacement === 'header' }"
-                    type="button"
-                    @click="setAuthPlacement('header')"
-                  >
-                    Header
-                  </button>
-                  <button
-                    class="segment-button"
-                    :class="{ active: form.authPlacement === 'body' }"
-                    type="button"
-                    @click="setAuthPlacement('body')"
-                  >
-                    Body
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <label class="field">
-              <span>Headers JSON</span>
-              <textarea v-model.trim="form.requestHeaders" spellcheck="false" rows="4" required />
-            </label>
-
-            <label v-if="form.requestMethod === 'POST'" class="field">
-              <span>Body JSON</span>
-              <textarea v-model.trim="form.requestBody" spellcheck="false" rows="4" />
-            </label>
-
-            <div class="path-map">
-              <label v-for="key in JSON_PATH_KEYS" :key="key" class="field compact-field">
-                <span>{{ JSON_PATH_LABELS[key] }}路径</span>
-                <input v-model.trim="form.jsonPaths[key]" autocomplete="off" :required="key === 'balance'" />
+            <div v-if="isTemplateConfigOpen" class="template-config-body">
+              <label class="field">
+                <span>Path</span>
+                <input v-model.trim="form.requestPath" autocomplete="off" placeholder="/v1/usage" required />
               </label>
-            </div>
 
-            <div class="test-request-row">
-              <button class="button button-ghost" type="button" :disabled="testingRequest" @click="sendTestRequest">
-                <Loader2 v-if="testingRequest" :size="16" class="spinning" />
-                <Send v-else :size="16" />
-                发送
-              </button>
-              <span v-if="testMessage" class="test-message">{{ testMessage }}</span>
-            </div>
+              <div class="form-row two-columns">
+                <div class="field compact-field">
+                  <span>请求方式</span>
+                  <div class="segmented-control">
+                    <button
+                      class="segment-button"
+                      :class="{ active: form.requestMethod === 'GET' }"
+                      type="button"
+                      @click="setRequestMethod('GET')"
+                    >
+                      GET
+                    </button>
+                    <button
+                      class="segment-button"
+                      :class="{ active: form.requestMethod === 'POST' }"
+                      type="button"
+                      @click="setRequestMethod('POST')"
+                    >
+                      POST
+                    </button>
+                  </div>
+                </div>
 
-            <section v-if="testResponse !== null" class="json-result">
-              <div class="json-result-head">
-                <strong>JSON 响应</strong>
-                <span>{{ jsonLeaves.length }} 个参数</span>
+                <div class="field compact-field">
+                  <span>鉴权位置</span>
+                  <div class="segmented-control">
+                    <button
+                      class="segment-button"
+                      :class="{ active: form.authPlacement === 'header' }"
+                      type="button"
+                      @click="setAuthPlacement('header')"
+                    >
+                      Header
+                    </button>
+                    <button
+                      class="segment-button"
+                      :class="{ active: form.authPlacement === 'body' }"
+                      type="button"
+                      @click="setAuthPlacement('body')"
+                    >
+                      Body
+                    </button>
+                  </div>
+                </div>
               </div>
 
-              <div class="json-leaf-list">
-                <button
-                  v-for="leaf in jsonLeaves"
-                  :key="leaf.path"
-                  class="json-leaf"
-                  :class="{ selected: selectedJsonLeaf?.path === leaf.path }"
-                  type="button"
-                  @click="selectJsonLeaf(leaf)"
-                >
-                  <code>{{ leaf.path }}</code>
-                  <span>{{ leaf.preview }}</span>
+              <label class="field">
+                <span>Headers JSON</span>
+                <textarea v-model.trim="form.requestHeaders" spellcheck="false" rows="4" required />
+              </label>
+
+              <label v-if="form.requestMethod === 'POST'" class="field">
+                <span>Body JSON</span>
+                <textarea v-model.trim="form.requestBody" spellcheck="false" rows="4" />
+              </label>
+
+              <div class="path-map">
+                <label v-for="key in JSON_PATH_KEYS" :key="key" class="field compact-field">
+                  <span>{{ JSON_PATH_LABELS[key] }}路径</span>
+                  <input v-model.trim="form.jsonPaths[key]" autocomplete="off" :required="isJsonPathRequired(key)" />
+                </label>
+              </div>
+
+              <div class="test-request-row">
+                <button class="button button-ghost" type="button" :disabled="testingRequest" @click="sendTestRequest">
+                  <Loader2 v-if="testingRequest" :size="16" class="spinning" />
+                  <Send v-else :size="16" />
+                  发送
                 </button>
+                <span v-if="testMessage" class="test-message">{{ testMessage }}</span>
               </div>
 
-              <div v-if="selectedJsonLeaf" class="json-path-actions">
-                <code>{{ selectedJsonLeaf.path }}</code>
-                <button
-                  v-for="key in JSON_PATH_KEYS"
-                  :key="key"
-                  class="button button-ghost"
-                  type="button"
-                  @click="setSelectedPath(key)"
-                >
-                  设置为{{ JSON_PATH_LABELS[key] }}
-                </button>
-              </div>
+              <section v-if="testResponse !== null" class="json-result">
+                <div class="json-result-head">
+                  <strong>JSON 响应</strong>
+                  <span>{{ jsonLeaves.length }} 个参数</span>
+                </div>
 
-              <pre class="json-preview">{{ testJsonText }}</pre>
-            </section>
+                <div class="json-leaf-list">
+                  <button
+                    v-for="leaf in jsonLeaves"
+                    :key="leaf.path"
+                    class="json-leaf"
+                    :class="{ selected: selectedJsonLeaf?.path === leaf.path }"
+                    type="button"
+                    @click="selectJsonLeaf(leaf)"
+                  >
+                    <code>{{ leaf.path }}</code>
+                    <span>{{ leaf.preview }}</span>
+                  </button>
+                </div>
+
+                <div v-if="selectedJsonLeaf" class="json-path-actions">
+                  <code>{{ selectedJsonLeaf.path }}</code>
+                  <button
+                    v-for="key in JSON_PATH_KEYS"
+                    :key="key"
+                    class="button button-ghost"
+                    type="button"
+                    @click="setSelectedPath(key)"
+                  >
+                    设置为{{ JSON_PATH_LABELS[key] }}
+                  </button>
+                </div>
+
+                <pre class="json-preview">{{ testJsonText }}</pre>
+              </section>
+            </div>
           </section>
 
           <div class="modal-actions">
