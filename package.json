@@ -1,0 +1,21 @@
+{
+  "name": "quota-dock",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Quota Dock - AI额度看板，一款用于查询 AI 中转站额度的 uTools 插件。",
+  "scripts": {
+    "build": "vue-tsc --noEmit && vite build",
+    "test": "node scripts/run-tests.mjs",
+    "verify": "npm run test && npm run build"
+  },
+  "dependencies": {
+    "@lucide/vue": "^1.23.0",
+    "vue": "^3.4.31"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.4",
+    "typescript": "^5.4.5",
+    "vite": "^6.4.3",
+    "vue-tsc": "^2.0.22"
+  }
+}
