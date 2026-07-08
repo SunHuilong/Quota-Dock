@@ -348,6 +348,8 @@ p {
 
 .provider-list {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
   gap: 8px;
   height: 100%;
   min-height: 0;
@@ -356,6 +358,7 @@ p {
 }
 
 .provider-item {
+  min-width: 0;
   padding: 10px;
   background: var(--panel-soft);
   border: 1px solid var(--line);
@@ -363,8 +366,10 @@ p {
 }
 
 .provider-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   align-items: flex-start;
-  gap: 12px;
+  gap: 10px;
 }
 
 .provider-info {
@@ -489,32 +494,33 @@ p {
 }
 
 .provider-side {
-  display: grid;
-  flex: 0 0 176px;
-  justify-items: end;
-  align-content: start;
-  gap: 8px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
   min-width: 0;
 }
 
 .provider-balance {
-  width: 100%;
+  flex: 1 1 auto;
   min-width: 0;
-  text-align: right;
+  text-align: left;
 }
 
 .provider-balance strong {
   display: block;
   overflow-wrap: anywhere;
   color: var(--text);
-  font-size: 26px;
+  font-size: 24px;
   line-height: 1.04;
 }
 
 .provider-balance-meta {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-start;
+  flex-wrap: wrap;
   gap: 6px;
   min-width: 0;
   margin-top: 5px;
@@ -910,21 +916,13 @@ p {
   }
 }
 
-@media (max-width: 520px) {
+@media (max-width: 560px) {
+  .provider-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .provider-main {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
     gap: 8px;
-  }
-
-  .provider-side {
-    flex: none;
-    width: 150px;
-    gap: 7px;
-  }
-
-  .provider-balance {
-    min-width: 0;
   }
 
   .provider-balance strong {
@@ -937,10 +935,5 @@ p {
 
   .provider-updated-time {
     font-size: 10.5px;
-  }
-
-  .provider-actions {
-    grid-column: auto;
-    justify-content: flex-end;
   }
 }
