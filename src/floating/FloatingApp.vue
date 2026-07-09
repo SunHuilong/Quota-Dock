@@ -89,7 +89,7 @@ onBeforeUnmount(() => {
 
     <section v-else-if="!providers.length" class="floating-empty">
       <WalletCards :size="24" />
-      <span>暂无中转站</span>
+      <span>暂无站点</span>
     </section>
 
     <section v-else class="floating-list">

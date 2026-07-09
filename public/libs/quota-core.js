@@ -26,26 +26,26 @@ function normalizeBaseUrl(rawValue) {
   const value = String(rawValue || "").trim();
 
   if (!value) {
-    throw new Error("请填写中转站地址");
+    throw new Error("请填写站点地址");
   }
 
   let parsed;
   try {
     parsed = new URL(value);
   } catch {
-    throw new Error("中转站地址格式不正确");
+    throw new Error("站点地址格式不正确");
   }
 
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error("中转站地址仅支持 http 或 https");
+    throw new Error("站点地址仅支持 http 或 https");
   }
 
   if (!parsed.hostname) {
-    throw new Error("中转站地址缺少域名");
+    throw new Error("站点地址缺少域名");
   }
 
   if (parsed.username || parsed.password) {
-    throw new Error("中转站地址不能包含用户名或密码");
+    throw new Error("站点地址不能包含用户名或密码");
   }
 
   parsed.hash = "";

@@ -574,7 +574,7 @@ onBeforeUnmount(() => {
         </div>
         <div>
           <h1>AI 额度查询</h1>
-          <p>{{ providerCount }} 个中转站</p>
+          <p>{{ providerCount }} 个站点</p>
         </div>
       </div>
       <div class="header-actions">
@@ -630,10 +630,10 @@ onBeforeUnmount(() => {
 
       <div v-else-if="!providers.length" class="empty-state">
         <WalletCards :size="26" />
-        <span>还没有中转站</span>
+        <span>还没有站点</span>
         <button class="button button-primary" type="button" @click="openCreateModal">
           <Plus :size="16" />
-          新增中转站
+          新增站点
         </button>
       </div>
 
@@ -710,7 +710,7 @@ onBeforeUnmount(() => {
           <div class="modal-heading">
             <div>
               <p class="eyebrow">Provider Config</p>
-              <h2>{{ isEditing ? "编辑中转站" : "新增中转站" }}</h2>
+              <h2>{{ isEditing ? "编辑站点" : "新增站点" }}</h2>
             </div>
             <button class="icon-button" type="button" title="关闭" aria-label="关闭" @click="closeProviderModal">
               <X :size="18" />
@@ -720,7 +720,7 @@ onBeforeUnmount(() => {
           <div class="form-row name-interval-row">
             <label class="field name-field compact-field">
               <span>名称</span>
-              <input v-model.trim="form.name" autocomplete="off" placeholder="例如：主用中转站" required />
+              <input v-model.trim="form.name" autocomplete="off" placeholder="例如：主用站点" required />
             </label>
 
             <label class="field interval-field compact-field">
@@ -909,7 +909,7 @@ onBeforeUnmount(() => {
           <div class="delete-icon">
             <Trash2 :size="24" />
           </div>
-          <h2>删除中转站</h2>
+          <h2>删除站点</h2>
           <p>确认删除「{{ pendingDeleteProvider.name }}」？配置和加密保存的 API Key 会一起删除。</p>
           <div class="modal-actions">
             <button class="button button-ghost" type="button" :disabled="deleting" @click="closeDeleteDialog">取消</button>

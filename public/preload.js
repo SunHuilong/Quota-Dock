@@ -134,7 +134,7 @@
       const doc = await api.db.promises.get(providerDocId(id));
 
       if (!doc || doc._deleted) {
-        throw new Error("中转站不存在");
+        throw new Error("站点不存在");
       }
 
       return doc;
@@ -156,7 +156,7 @@
         ...current,
         ...patch
       });
-      assertDbResult(result, "保存中转站");
+      assertDbResult(result, "保存站点");
       return getProviderDoc(id);
     }
 
@@ -278,7 +278,7 @@
       };
 
       const result = await api.db.promises.put(doc);
-      assertDbResult(result, "保存中转站");
+      assertDbResult(result, "保存站点");
 
       if (normalized.apiKey) {
         api.dbCryptoStorage.setItem(apiKeyStorageKey(id), normalized.apiKey);
@@ -308,7 +308,7 @@
       const api = requireUtools();
       const doc = await getProviderDoc(id);
       const result = await api.db.promises.remove(doc);
-      assertDbResult(result, "删除中转站");
+      assertDbResult(result, "删除站点");
       api.dbCryptoStorage.removeItem(apiKeyStorageKey(id));
       return true;
     }
