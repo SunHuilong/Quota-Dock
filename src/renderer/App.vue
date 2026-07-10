@@ -134,6 +134,7 @@ const refreshingAll = ref(false);
 const refreshingDue = ref(false);
 const showApiKey = ref(false);
 const errorMessage = ref("");
+const providerFormErrorMessage = ref("");
 const refreshingIds = ref<string[]>([]);
 const isProviderModalOpen = ref(false);
 const isTemplateConfigOpen = ref(false);
@@ -238,6 +239,10 @@ function setError(error: unknown, fallback: string) {
   errorMessage.value = error instanceof Error ? error.message : fallback;
 }
 
+function setProviderFormError(error: unknown, fallback: string) {
+  providerFormErrorMessage.value = error instanceof Error ? error.message : fallback;
+}
+
 function resetTestResult() {
   testResponse.value = null;
   testMessage.value = "";
@@ -260,6 +265,7 @@ function resetForm() {
   applyTemplatePreset("openai-usage");
   form.refreshIntervalMinutes = 30;
   showApiKey.value = false;
+  providerFormErrorMessage.value = "";
   resetTestResult();
 }
 
@@ -294,6 +300,7 @@ function editProvider(provider: QuotaProvider) {
   form.refreshIntervalMinutes = provider.refreshIntervalMinutes;
   showApiKey.value = false;
   errorMessage.value = "";
+  providerFormErrorMessage.value = "";
   resetTestResult();
   isProviderModalOpen.value = true;
 }
@@ -459,7 +466,7 @@ async function bootstrap() {
 
 async function saveProvider() {
   saving.value = true;
-  errorMessage.value = "";
+  providerFormErrorMessage.value = "";
 
   try {
     const savedProvider = await bridge.saveProvider(buildProviderInput());
@@ -468,7 +475,7 @@ async function saveProvider() {
     await loadProviders();
     await refreshProvider(savedProvider);
   } catch (error) {
-    setError(error, "保存失败");
+    setProviderFormError(error, "保存失败");
   } finally {
     saving.value = false;
   }
@@ -476,7 +483,7 @@ async function saveProvider() {
 
 async function sendTestRequest() {
   testingRequest.value = true;
-  errorMessage.value = "";
+  providerFormErrorMessage.value = "";
   testMessage.value = "";
   selectedJsonLeaf.value = null;
 
@@ -485,7 +492,7 @@ async function sendTestRequest() {
     testMessage.value = "已获取 JSON 响应";
   } catch (error) {
     testResponse.value = null;
-    setError(error, "发送失败");
+    setProviderFormError(error, "发送失败");
   } finally {
     testingRequest.value = false;
   }
@@ -845,15 +852,6 @@ onBeforeUnmount(() => {
                 </label>
               </div>
 
-              <div class="test-request-row">
-                <button class="button button-ghost" type="button" :disabled="testingRequest" @click="sendTestRequest">
-                  <Loader2 v-if="testingRequest" :size="16" class="spinning" />
-                  <Send v-else :size="16" />
-                  发送
-                </button>
-                <span v-if="testMessage" class="test-message">{{ testMessage }}</span>
-              </div>
-
               <section v-if="testResponse !== null" class="json-result">
                 <div class="json-result-head">
                   <strong>JSON 响应</strong>
@@ -892,14 +890,29 @@ onBeforeUnmount(() => {
             </div>
           </section>
 
-          <div class="modal-actions">
-            <button class="button button-ghost" type="button" :disabled="saving" @click="closeProviderModal">取消</button>
-            <button class="button button-primary" type="submit" :disabled="saving">
-              <Loader2 v-if="saving" :size="16" class="spinning" />
-              <Save v-else-if="isEditing" :size="16" />
-              <Plus v-else :size="16" />
-              {{ isEditing ? "保存" : "添加" }}
-            </button>
+          <p v-if="providerFormErrorMessage" class="notice notice-error" role="alert">
+            <AlertTriangle :size="16" />
+            {{ providerFormErrorMessage }}
+          </p>
+
+          <div class="modal-actions provider-modal-actions">
+            <div class="test-request-row">
+              <button class="button button-ghost" type="button" :disabled="testingRequest" @click="sendTestRequest">
+                <Loader2 v-if="testingRequest" :size="16" class="spinning" />
+                <Send v-else :size="16" />
+                测试
+              </button>
+              <span v-if="testMessage" class="test-message">{{ testMessage }}</span>
+            </div>
+            <div class="modal-action-group">
+              <button class="button button-ghost" type="button" :disabled="saving" @click="closeProviderModal">取消</button>
+              <button class="button button-primary" type="submit" :disabled="saving">
+                <Loader2 v-if="saving" :size="16" class="spinning" />
+                <Save v-else-if="isEditing" :size="16" />
+                <Plus v-else :size="16" />
+                {{ isEditing ? "保存" : "添加" }}
+              </button>
+            </div>
           </div>
         </form>
       </div>

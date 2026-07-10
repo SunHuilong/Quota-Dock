@@ -1003,6 +1003,22 @@ p {
   padding-top: 4px;
 }
 
+.provider-modal-actions {
+  justify-content: space-between;
+}
+
+.provider-modal-actions .test-request-row {
+  flex: 1 1 0;
+}
+
+.modal-action-group {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 9px;
+  margin-left: 10px;
+}
+
 .delete-modal {
   text-align: center;
 }
