@@ -435,15 +435,20 @@ async function loadProviders() {
 }
 
 async function refreshDueSilently() {
-  if (refreshingDue.value || refreshingAll.value || refreshingIds.value.length > 0) {
+  if (refreshingDue.value || refreshingAll.value || refreshingIds.value.length > 0 || deleting.value) {
     return;
   }
 
   refreshingDue.value = true;
   try {
-    providers.value = await bridge.refreshDueProviders();
+    const refreshedProviders = await bridge.refreshDueProviders();
+    if (!deleting.value) {
+      providers.value = refreshedProviders;
+    }
   } catch (error) {
-    setError(error, "自动刷新失败");
+    if (!deleting.value) {
+      setError(error, "自动刷新失败");
+    }
   } finally {
     refreshingDue.value = false;
   }
@@ -501,7 +506,7 @@ async function sendTestRequest() {
 async function confirmDeleteProvider() {
   const provider = pendingDeleteProvider.value;
 
-  if (!provider) {
+  if (!provider || deleting.value) {
     return;
   }
 
@@ -510,12 +515,19 @@ async function confirmDeleteProvider() {
 
   try {
     await bridge.deleteProvider(provider.id);
+    providers.value = providers.value.filter((item) => item.id !== provider.id);
     if (form.id === provider.id) {
       resetForm();
       isProviderModalOpen.value = false;
     }
     pendingDeleteProvider.value = null;
-    await loadProviders();
+
+    try {
+      await loadProviders();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "列表刷新失败";
+      errorMessage.value = `删除成功，但列表刷新失败：${message}`;
+    }
   } catch (error) {
     setError(error, "删除失败");
   } finally {
@@ -530,6 +542,7 @@ async function refreshProvider(provider: QuotaProvider) {
   try {
     const updated = await bridge.refreshProvider(provider.id);
     providers.value = providers.value.map((item) => (item.id === updated.id ? updated : item));
+    await bridge.syncFloatingWindow();
   } catch (error) {
     setError(error, "刷新失败");
   } finally {

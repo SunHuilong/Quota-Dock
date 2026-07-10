@@ -16,15 +16,30 @@ function setError(error: unknown, fallback: string) {
   errorMessage.value = error instanceof Error ? error.message : fallback;
 }
 
+async function applyProviders(nextProviders: QuotaProvider[]) {
+  providers.value = nextProviders;
+  return nextProviders.length;
+}
+
+async function syncProviders() {
+  errorMessage.value = "";
+  try {
+    return await applyProviders(await bridge.listProviders());
+  } catch (error) {
+    setError(error, "同步失败");
+    return providers.value.length;
+  }
+}
+
 async function loadDue() {
   try {
-    providers.value = await bridge.refreshDueProviders();
+    await applyProviders(await bridge.refreshDueProviders());
   } catch (error) {
     setError(error, "自动刷新失败");
     try {
-      providers.value = await bridge.listProviders();
+      await applyProviders(await bridge.listProviders());
     } catch {
-      providers.value = [];
+      await applyProviders([]);
     }
   }
 }
@@ -34,7 +49,7 @@ async function refreshAll() {
   errorMessage.value = "";
 
   try {
-    providers.value = await bridge.refreshAll();
+    await applyProviders(await bridge.refreshAll());
   } catch (error) {
     setError(error, "刷新失败");
   } finally {
@@ -47,6 +62,7 @@ function closeWindow() {
 }
 
 onMounted(async () => {
+  window.__quotaSyncProviders = syncProviders;
   loading.value = true;
   await loadDue();
   loading.value = false;
@@ -56,6 +72,9 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  if (window.__quotaSyncProviders === syncProviders) {
+    delete window.__quotaSyncProviders;
+  }
   window.clearInterval(refreshTimer);
 });
 </script>

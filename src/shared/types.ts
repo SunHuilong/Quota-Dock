@@ -65,5 +65,6 @@ export interface QuotaBridge {
   refreshProvider(id: string): Promise<QuotaProvider>;
   refreshDueProviders(): Promise<QuotaProvider[]>;
   refreshAll(): Promise<QuotaProvider[]>;
+  syncFloatingWindow(): Promise<void>;
   openFloatingWindow(): Promise<boolean>;
 }

@@ -43,6 +43,9 @@ function createUnavailableBridge(): QuotaBridge {
     refreshAll(): Promise<QuotaProvider[]> {
       return fail();
     },
+    syncFloatingWindow(): Promise<void> {
+      return fail();
+    },
     openFloatingWindow(): Promise<boolean> {
       return fail();
     }

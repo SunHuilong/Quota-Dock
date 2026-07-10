@@ -46,6 +46,8 @@
     const FLOATING_WINDOW_MIN_HEIGHT = 188;
     const FLOATING_WINDOW_PROVIDER_HEIGHT = 136;
     const FLOATING_WINDOW_MAX_HEIGHT = 460;
+    const FLOATING_SYNC_SCRIPT =
+      '(async () => typeof window.__quotaSyncProviders === "function" ? await window.__quotaSyncProviders() : null)()';
 
     const utoolsApi = typeof utools !== "undefined" ? utools : root.utools;
     let floatingWindow = null;
@@ -71,6 +73,10 @@
         FLOATING_WINDOW_MAX_HEIGHT,
         FLOATING_WINDOW_MIN_HEIGHT + Math.max(0, providerCount - 1) * FLOATING_WINDOW_PROVIDER_HEIGHT
       );
+    }
+
+    function isValidProviderCount(providerCount) {
+      return Number.isSafeInteger(providerCount) && providerCount >= 0;
     }
 
     function apiKeyStorageKey(id) {
@@ -295,8 +301,6 @@
         api.dbCryptoStorage.setItem(apiKeyStorageKey(id), normalized.apiKey);
       }
 
-      await updateFloatingWindowHeight();
-
       return toRendererProvider(await getProviderDoc(id));
     }
 
@@ -322,8 +326,20 @@
       const doc = await getProviderDoc(id);
       const result = await api.db.promises.remove(doc);
       assertDbResult(result, "删除站点");
-      api.dbCryptoStorage.removeItem(apiKeyStorageKey(id));
-      await updateFloatingWindowHeight();
+
+      try {
+        const apiKey = api.dbCryptoStorage.getItem(apiKeyStorageKey(id));
+        if (apiKey) {
+          await api.dbCryptoStorage.removeItem(apiKeyStorageKey(id));
+        }
+      } catch (error) {
+        if (typeof console !== "undefined" && console.warn) {
+          console.warn("[quota-dock] 删除站点后清理 API Key 失败", error);
+        }
+      }
+
+      await syncFloatingWindow();
+
       return true;
     }
 
@@ -390,17 +406,89 @@
       return listProviders();
     }
 
-    async function updateFloatingWindowHeight() {
-      if (
-        !floatingWindow ||
-        (typeof floatingWindow.isDestroyed === "function" && floatingWindow.isDestroyed()) ||
-        typeof floatingWindow.setSize !== "function"
-      ) {
+    function resizeFloatingWindow(providerCount) {
+      if (!isValidProviderCount(providerCount) || !floatingWindow || typeof floatingWindow.setSize !== "function") {
+        return false;
+      }
+
+      const targetHeight = getFloatingWindowHeight(providerCount);
+
+      try {
+        if (typeof floatingWindow.isDestroyed === "function" && floatingWindow.isDestroyed()) {
+          return false;
+        }
+        floatingWindow.setSize(FLOATING_WINDOW_WIDTH, targetHeight);
+
+        if (
+          typeof floatingWindow.getSize === "function" &&
+          typeof floatingWindow.getBounds === "function" &&
+          typeof floatingWindow.setBounds === "function"
+        ) {
+          const actualSize = floatingWindow.getSize();
+          if (
+            Array.isArray(actualSize) &&
+            (actualSize[0] !== FLOATING_WINDOW_WIDTH || actualSize[1] !== targetHeight)
+          ) {
+            floatingWindow.setBounds({
+              ...floatingWindow.getBounds(),
+              width: FLOATING_WINDOW_WIDTH,
+              height: targetHeight
+            });
+          }
+        }
+
+        return true;
+      } catch (error) {
+        if (typeof console !== "undefined" && console.warn) {
+          console.warn("[quota-dock] 同步浮窗高度失败", error);
+        }
+        return false;
+      }
+    }
+
+    async function syncFloatingWindow() {
+      if (!floatingWindow) {
         return;
       }
 
-      const providerCount = (await listProviderDocs()).length;
-      floatingWindow.setSize(FLOATING_WINDOW_WIDTH, getFloatingWindowHeight(providerCount));
+      try {
+        if (typeof floatingWindow.isDestroyed === "function" && floatingWindow.isDestroyed()) {
+          return;
+        }
+      } catch (error) {
+        if (typeof console !== "undefined" && console.warn) {
+          console.warn("[quota-dock] 检查浮窗状态失败", error);
+        }
+        return;
+      }
+
+      let providerCount = null;
+
+      try {
+        if (floatingWindow.webContents && typeof floatingWindow.webContents.executeJavaScript === "function") {
+          const renderedCount = await floatingWindow.webContents.executeJavaScript(FLOATING_SYNC_SCRIPT);
+          if (isValidProviderCount(renderedCount)) {
+            providerCount = renderedCount;
+          }
+        }
+      } catch (error) {
+        if (typeof console !== "undefined" && console.warn) {
+          console.warn("[quota-dock] 同步浮窗内容失败", error);
+        }
+      }
+
+      if (providerCount === null) {
+        try {
+          providerCount = (await listProviderDocs()).length;
+        } catch (error) {
+          if (typeof console !== "undefined" && console.warn) {
+            console.warn("[quota-dock] 读取浮窗站点数量失败", error);
+          }
+          return;
+        }
+      }
+
+      resizeFloatingWindow(providerCount);
     }
 
     async function openFloatingWindow() {
@@ -410,13 +498,8 @@
         throw new Error("当前 uTools 环境不支持创建浮窗");
       }
 
-      const providerCount = (await listProviderDocs()).length;
-      const floatingWindowHeight = getFloatingWindowHeight(providerCount);
-
       if (floatingWindow && (!floatingWindow.isDestroyed || !floatingWindow.isDestroyed())) {
-        if (typeof floatingWindow.setSize === "function") {
-          floatingWindow.setSize(FLOATING_WINDOW_WIDTH, floatingWindowHeight);
-        }
+        await syncFloatingWindow();
         if (floatingWindow.show) {
           floatingWindow.show();
         }
@@ -425,6 +508,9 @@
         }
         return true;
       }
+
+      const providerCount = (await listProviderDocs()).length;
+      const floatingWindowHeight = getFloatingWindowHeight(providerCount);
 
       floatingWindow = api.createBrowserWindow(
         "floating.html",
@@ -475,6 +561,7 @@
       refreshProvider,
       refreshDueProviders,
       refreshAll,
+      syncFloatingWindow,
       openFloatingWindow
     };
   } catch (error) {
