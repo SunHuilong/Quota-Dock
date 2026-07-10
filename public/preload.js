@@ -42,6 +42,10 @@
 
     const PROVIDER_PREFIX = "quota-provider/";
     const API_KEY_PREFIX = "quota-api-key/";
+    const FLOATING_WINDOW_WIDTH = 360;
+    const FLOATING_WINDOW_MIN_HEIGHT = 188;
+    const FLOATING_WINDOW_PROVIDER_HEIGHT = 136;
+    const FLOATING_WINDOW_MAX_HEIGHT = 460;
 
     const utoolsApi = typeof utools !== "undefined" ? utools : root.utools;
     let floatingWindow = null;
@@ -60,6 +64,13 @@
 
     function providerDocId(id) {
       return `${PROVIDER_PREFIX}${id}`;
+    }
+
+    function getFloatingWindowHeight(providerCount) {
+      return Math.min(
+        FLOATING_WINDOW_MAX_HEIGHT,
+        FLOATING_WINDOW_MIN_HEIGHT + Math.max(0, providerCount - 1) * FLOATING_WINDOW_PROVIDER_HEIGHT
+      );
     }
 
     function apiKeyStorageKey(id) {
@@ -284,6 +295,8 @@
         api.dbCryptoStorage.setItem(apiKeyStorageKey(id), normalized.apiKey);
       }
 
+      await updateFloatingWindowHeight();
+
       return toRendererProvider(await getProviderDoc(id));
     }
 
@@ -310,6 +323,7 @@
       const result = await api.db.promises.remove(doc);
       assertDbResult(result, "删除站点");
       api.dbCryptoStorage.removeItem(apiKeyStorageKey(id));
+      await updateFloatingWindowHeight();
       return true;
     }
 
@@ -376,6 +390,19 @@
       return listProviders();
     }
 
+    async function updateFloatingWindowHeight() {
+      if (
+        !floatingWindow ||
+        (typeof floatingWindow.isDestroyed === "function" && floatingWindow.isDestroyed()) ||
+        typeof floatingWindow.setSize !== "function"
+      ) {
+        return;
+      }
+
+      const providerCount = (await listProviderDocs()).length;
+      floatingWindow.setSize(FLOATING_WINDOW_WIDTH, getFloatingWindowHeight(providerCount));
+    }
+
     async function openFloatingWindow() {
       const api = requireUtools();
 
@@ -383,7 +410,13 @@
         throw new Error("当前 uTools 环境不支持创建浮窗");
       }
 
+      const providerCount = (await listProviderDocs()).length;
+      const floatingWindowHeight = getFloatingWindowHeight(providerCount);
+
       if (floatingWindow && (!floatingWindow.isDestroyed || !floatingWindow.isDestroyed())) {
+        if (typeof floatingWindow.setSize === "function") {
+          floatingWindow.setSize(FLOATING_WINDOW_WIDTH, floatingWindowHeight);
+        }
         if (floatingWindow.show) {
           floatingWindow.show();
         }
@@ -396,8 +429,8 @@
       floatingWindow = api.createBrowserWindow(
         "floating.html",
         {
-          width: 360,
-          height: 460,
+          width: FLOATING_WINDOW_WIDTH,
+          height: floatingWindowHeight,
           title: "AI 额度浮窗",
           frame: false,
           resizable: false,
