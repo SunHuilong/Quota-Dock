@@ -2,7 +2,15 @@
 import { AlertTriangle, CheckCircle2, Loader2, RefreshCw, WalletCards, X } from "@lucide/vue";
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import { getQuotaBridge } from "../shared/bridge";
-import { formatBalance, formatDateTime, formatQuotaValue, formatTime, providerStatus, quotaProgress } from "../shared/format";
+import {
+  formatBalance,
+  formatDateTime,
+  formatQuotaValue,
+  formatTime,
+  providerStatus,
+  quotaProgress,
+  quotaRemainingPercent
+} from "../shared/format";
 import type { QuotaProvider } from "../shared/types";
 
 const bridge = getQuotaBridge();
@@ -130,7 +138,7 @@ onBeforeUnmount(() => {
         <div v-if="quotaProgress(provider) !== null" class="quota-progress floating-quota-progress" aria-label="额度使用进度">
           <div class="quota-progress-text">
             <span>{{ formatQuotaValue(provider.lastUsed) }} / {{ formatQuotaValue(provider.lastLimit) }}</span>
-            <strong>{{ quotaProgress(provider)?.toFixed(1) }}%</strong>
+            <strong>{{ quotaRemainingPercent(provider)?.toFixed(1) }}%</strong>
           </div>
           <div class="quota-progress-track">
             <span :style="{ width: `${quotaProgress(provider)}%` }"></span>

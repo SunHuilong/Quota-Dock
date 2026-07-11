@@ -70,6 +70,11 @@ export function quotaProgress(provider: QuotaProvider): number | null {
   return Math.max(0, Math.min(100, (provider.lastUsed / provider.lastLimit) * 100));
 }
 
+export function quotaRemainingPercent(provider: QuotaProvider): number | null {
+  const usedPercent = quotaProgress(provider);
+  return usedPercent === null ? null : 100 - usedPercent;
+}
+
 export function formatDomain(baseUrl: string): string {
   try {
     const url = new URL(baseUrl);

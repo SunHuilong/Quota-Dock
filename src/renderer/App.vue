@@ -30,6 +30,7 @@ import {
   formatTime,
   providerStatus,
   quotaProgress,
+  quotaRemainingPercent,
   sumBalance
 } from "../shared/format";
 import type {
@@ -723,7 +724,7 @@ onBeforeUnmount(() => {
               <div v-if="quotaProgress(provider) !== null" class="quota-progress" aria-label="额度使用进度">
                 <div class="quota-progress-text">
                   <span>已用 {{ formatQuotaValue(provider.lastUsed) }} / {{ formatQuotaValue(provider.lastLimit) }}</span>
-                  <strong>{{ quotaProgress(provider)?.toFixed(1) }}%</strong>
+                  <strong>{{ quotaRemainingPercent(provider)?.toFixed(1) }}%</strong>
                 </div>
                 <div class="quota-progress-row">
                   <div class="quota-progress-track">
