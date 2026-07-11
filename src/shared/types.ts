@@ -22,6 +22,8 @@ export interface QuotaProvider {
   requestHeaders: string;
   requestBody: string;
   jsonPaths: JsonPathMap;
+  manualLimit: number | null;
+  defaultUnit: string;
   refreshIntervalMinutes: number;
   lastBalance: number | null;
   lastLimit: number | null;
@@ -48,6 +50,8 @@ export interface ProviderInput {
   requestHeaders: string;
   requestBody: string;
   jsonPaths: JsonPathMap;
+  manualLimit: number | null;
+  defaultUnit: string;
   refreshIntervalMinutes: number;
 }
 

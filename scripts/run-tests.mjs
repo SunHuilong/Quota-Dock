@@ -51,6 +51,8 @@ assert.equal(openAiProvider.requestPath, "/v1/usage");
 assert.equal(openAiProvider.jsonPaths.balance, "");
 assert.equal(openAiProvider.jsonPaths.limit, "subscription.daily_limit_usd");
 assert.equal(openAiProvider.jsonPaths.used, "subscription.daily_usage_usd");
+assert.equal(openAiProvider.manualLimit, null);
+assert.equal(openAiProvider.defaultUnit, "USD");
 
 const legacyStandardProvider = normalizeProviderInput({
   name: "legacy",
@@ -150,6 +152,49 @@ assert.deepEqual(parseProviderBalanceResponse({ balance: 12 }, { balance: "balan
   used: null,
   resetAt: null
 });
+assert.deepEqual(parseProviderBalanceResponse({ balance: 12 }, { balance: "balance" }, 100), {
+  isValid: true,
+  remaining: 12,
+  unit: "USD",
+  limit: 100,
+  used: 88,
+  resetAt: null
+});
+assert.deepEqual(parseProviderBalanceResponse({ balance: 12 }, { balance: "balance" }, null, "CNY"), {
+  isValid: true,
+  remaining: 12,
+  unit: "CNY",
+  limit: null,
+  used: null,
+  resetAt: null
+});
+assert.deepEqual(
+  parseProviderBalanceResponse(
+    { balance: 12, unit: "EUR" },
+    { balance: "balance", unit: "unit" },
+    null,
+    "CNY"
+  ),
+  {
+    isValid: true,
+    remaining: 12,
+    unit: "EUR",
+    limit: null,
+    used: null,
+    resetAt: null
+  }
+);
+assert.deepEqual(
+  parseProviderBalanceResponse({ balance: 12, limit: 80 }, { balance: "balance", limit: "limit" }, 100),
+  {
+    isValid: true,
+    remaining: 12,
+    unit: "USD",
+    limit: 100,
+    used: 88,
+    resetAt: null
+  }
+);
 assert.throws(() => parseProviderBalanceResponse({ balance: "abc" }, { balance: "balance" }), /余额字段/);
 assert.throws(() => parseProviderBalanceResponse({ data: {} }, { balance: "data.balance" }), /余额字段路径未找到/);
 assert.throws(() => parseProviderBalanceResponse({ data: {} }, {}), /余额字段路径/);
@@ -169,6 +214,40 @@ assert.equal(
     refreshIntervalMinutes: 5
   }).jsonPaths.balance,
   "data.balance"
+);
+const manualLimitProvider = normalizeProviderInput({
+  name: "manual limit",
+  baseUrl: "https://gateway.example.com",
+  apiKey: "sk-test",
+  templateId: TEMPLATE_CUSTOM,
+  requestPath: "/quota",
+  requestMethod: "GET",
+  authPlacement: "header",
+  requestHeaders: "{}",
+  jsonPaths: { balance: "data.balance", limit: "data.limit" },
+  manualLimit: "100.5",
+  defaultUnit: " CNY ",
+  refreshIntervalMinutes: 5
+});
+assert.equal(manualLimitProvider.manualLimit, 100.5);
+assert.equal(manualLimitProvider.jsonPaths.limit, "");
+assert.equal(manualLimitProvider.defaultUnit, "CNY");
+assert.throws(
+  () =>
+    normalizeProviderInput({
+      name: "invalid manual limit",
+      baseUrl: "https://gateway.example.com",
+      apiKey: "sk-test",
+      templateId: TEMPLATE_CUSTOM,
+      requestPath: "/quota",
+      requestMethod: "GET",
+      authPlacement: "header",
+      requestHeaders: "{}",
+      jsonPaths: { balance: "data.balance" },
+      manualLimit: 0,
+      refreshIntervalMinutes: 5
+    }),
+  /备用总额度/
 );
 assert.throws(
   () =>

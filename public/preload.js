@@ -25,6 +25,7 @@
       AUTH_PLACEMENT_HEADER,
       BALANCE_ROUTE,
       DEFAULT_JSON_PATHS,
+      DEFAULT_UNIT,
       REQUEST_TIMEOUT_MS,
       REQUEST_METHOD_GET,
       buildProviderRequestConfig,
@@ -131,12 +132,14 @@
           ...template.jsonPaths,
           ...(doc.jsonPaths || {})
         },
+        manualLimit: doc.manualLimit ?? null,
+        defaultUnit: String(doc.defaultUnit || DEFAULT_UNIT).trim() || DEFAULT_UNIT,
         refreshIntervalMinutes: doc.refreshIntervalMinutes,
         lastBalance: doc.lastBalance ?? null,
         lastLimit: doc.lastLimit ?? null,
         lastUsed: doc.lastUsed ?? null,
         lastResetAt: doc.lastResetAt ?? null,
-        lastUnit: doc.lastUnit ?? "USD",
+        lastUnit: String(doc.lastUnit || doc.defaultUnit || DEFAULT_UNIT).trim() || DEFAULT_UNIT,
         lastIsValid: doc.lastIsValid ?? null,
         lastCheckedAt: doc.lastCheckedAt ?? null,
         lastError: doc.lastError ?? "",
@@ -281,12 +284,14 @@
         requestHeaders: normalized.requestHeaders,
         requestBody: normalized.requestBody,
         jsonPaths: normalized.jsonPaths,
+        manualLimit: normalized.manualLimit,
+        defaultUnit: normalized.defaultUnit,
         refreshIntervalMinutes: normalized.refreshIntervalMinutes,
         lastBalance: existing ? existing.lastBalance ?? null : null,
         lastLimit: existing ? existing.lastLimit ?? null : null,
         lastUsed: existing ? existing.lastUsed ?? null : null,
         lastResetAt: existing ? existing.lastResetAt ?? null : null,
-        lastUnit: existing ? existing.lastUnit ?? "USD" : "USD",
+        lastUnit: existing ? existing.lastUnit ?? normalized.defaultUnit : normalized.defaultUnit,
         lastIsValid: existing ? existing.lastIsValid ?? null : null,
         lastCheckedAt: existing ? existing.lastCheckedAt ?? null : null,
         lastError: existing ? existing.lastError ?? "" : "",
@@ -359,9 +364,15 @@
       }
 
       try {
-        const config = buildProviderRequestConfig(toRendererProvider(doc), apiKey);
+        const provider = toRendererProvider(doc);
+        const config = buildProviderRequestConfig(provider, apiKey);
         const response = await requestJson(config, REQUEST_TIMEOUT_MS);
-        const extracted = parseProviderBalanceResponse(response, toRendererProvider(doc).jsonPaths);
+        const extracted = parseProviderBalanceResponse(
+          response,
+          provider.jsonPaths,
+          provider.manualLimit,
+          provider.defaultUnit
+        );
         const updatedDoc = await putProviderPatch(id, {
           lastBalance: extracted.remaining,
           lastLimit: extracted.limit,

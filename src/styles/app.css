@@ -847,6 +847,109 @@ p {
   gap: 10px;
 }
 
+.path-preview-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 8px 9px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.35;
+  background: var(--primary-soft);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.path-preview-note svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--primary);
+}
+
+.path-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(88px, 36%);
+  min-width: 0;
+  min-height: 38px;
+  overflow: hidden;
+  background: var(--panel-soft);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  transition:
+    border-color 0.16s ease,
+    box-shadow 0.16s ease,
+    background 0.16s ease;
+}
+
+.path-control:focus-within {
+  background: var(--panel);
+  border-color: var(--primary);
+  box-shadow: 0 0 0 4px var(--primary-soft);
+}
+
+.path-control > input {
+  min-width: 0;
+  min-height: 36px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+.path-control > input:focus {
+  background: transparent;
+  box-shadow: none;
+}
+
+.path-mode-status {
+  overflow: hidden;
+  min-width: 0;
+  min-height: 36px;
+  padding: 0 11px;
+  color: var(--amber);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 36px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.path-mode-input::placeholder {
+  color: var(--amber);
+  font-weight: 800;
+  opacity: 1;
+}
+
+.path-value {
+  min-width: 0;
+  min-height: 36px;
+  color: var(--muted);
+  border-left: 1px solid var(--line);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.path-value-preview {
+  overflow: hidden;
+  padding: 0 10px;
+  line-height: 36px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.path-control .path-value-input {
+  padding: 0 10px;
+  color: var(--text);
+  text-align: right;
+  border-left: 1px solid var(--line);
+}
+
+.path-value-input::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+
 .test-request-row {
   justify-content: flex-start;
   gap: 10px;
@@ -953,6 +1056,29 @@ p {
   min-height: 30px;
   padding: 0 9px;
   font-size: 12px;
+}
+
+.json-preview-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-height: 34px;
+  padding: 0 9px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 900;
+  text-align: left;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.json-preview-toggle svg {
+  flex: 0 0 auto;
+  color: var(--muted);
 }
 
 .json-preview {

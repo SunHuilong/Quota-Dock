@@ -9,6 +9,7 @@ import {
   CloudOff,
   Eye,
   EyeOff,
+  Info,
   Loader2,
   MonitorUp,
   Pencil,
@@ -60,6 +61,7 @@ interface TemplatePreset {
 }
 
 const DEFAULT_REQUEST_PATH = "/v1/usage";
+const DEFAULT_UNIT = "USD";
 const DEFAULT_HEADER_HEADERS = `{
   "Authorization": "Bearer {{token}}",
   "Accept": "application/json"
@@ -138,6 +140,7 @@ const providerFormErrorMessage = ref("");
 const refreshingIds = ref<string[]>([]);
 const isProviderModalOpen = ref(false);
 const isTemplateConfigOpen = ref(false);
+const isJsonPreviewOpen = ref(false);
 const pendingDeleteProvider = ref<QuotaProvider | null>(null);
 const testingRequest = ref(false);
 const testResponse = ref<unknown | null>(null);
@@ -157,6 +160,8 @@ const form = reactive({
   requestHeaders: DEFAULT_HEADER_HEADERS,
   requestBody: "",
   jsonPaths: createEmptyJsonPaths(),
+  manualLimit: "" as number | "",
+  defaultUnit: DEFAULT_UNIT,
   refreshIntervalMinutes: 30
 });
 
@@ -223,6 +228,8 @@ function applyTemplatePreset(templateId: TemplateId) {
   form.requestHeaders = template.requestHeaders;
   form.requestBody = template.requestBody;
   Object.assign(form.jsonPaths, createEmptyJsonPaths(), template.jsonPaths);
+  form.manualLimit = "";
+  form.defaultUnit = DEFAULT_UNIT;
   isTemplateConfigOpen.value = template.id === "custom";
   resetTestResult();
 }
@@ -250,19 +257,27 @@ function resetTestResult() {
 }
 
 function isJsonPathRequired(key: JsonPathKey) {
+  const hasManualLimit = form.manualLimit !== "";
+
   if (key === "balance") {
-    return !form.jsonPaths.limit || !form.jsonPaths.used;
+    return (!form.jsonPaths.limit && !hasManualLimit) || !form.jsonPaths.used;
   }
 
-  return (key === "limit" || key === "used") && !form.jsonPaths.balance;
+  if (key === "limit") {
+    return !form.jsonPaths.balance && !hasManualLimit;
+  }
+
+  return key === "used" && !form.jsonPaths.balance;
 }
 
 function resetForm() {
+  isJsonPreviewOpen.value = false;
   form.id = "";
   form.name = "";
   form.baseUrl = "";
   form.apiKey = "";
   applyTemplatePreset("openai-usage");
+  form.manualLimit = "";
   form.refreshIntervalMinutes = 30;
   showApiKey.value = false;
   providerFormErrorMessage.value = "";
@@ -285,6 +300,7 @@ function closeProviderModal() {
 }
 
 function editProvider(provider: QuotaProvider) {
+  isJsonPreviewOpen.value = false;
   form.id = provider.id;
   form.name = provider.name;
   form.baseUrl = provider.baseUrl;
@@ -296,6 +312,8 @@ function editProvider(provider: QuotaProvider) {
   form.requestHeaders = provider.requestHeaders || defaultHeadersForAuth(form.authPlacement);
   form.requestBody = provider.requestBody || defaultBodyForAuth(form.authPlacement);
   Object.assign(form.jsonPaths, createEmptyJsonPaths(), provider.jsonPaths || {});
+  form.manualLimit = provider.manualLimit ?? "";
+  form.defaultUnit = provider.defaultUnit || DEFAULT_UNIT;
   isTemplateConfigOpen.value = form.templateId === "custom";
   form.refreshIntervalMinutes = provider.refreshIntervalMinutes;
   showApiKey.value = false;
@@ -364,6 +382,8 @@ function buildProviderInput(): ProviderInput {
     requestHeaders: form.requestHeaders,
     requestBody: form.requestBody,
     jsonPaths: { ...form.jsonPaths },
+    manualLimit: form.manualLimit === "" ? null : form.manualLimit,
+    defaultUnit: form.defaultUnit,
     refreshIntervalMinutes: form.refreshIntervalMinutes
   };
 }
@@ -407,6 +427,20 @@ function flattenJson(value: unknown, path = ""): JsonLeaf[] {
   return [{ path: path || "$", value, preview: formatJsonPreview(value) }];
 }
 
+function getJsonPathPreview(key: JsonPathKey) {
+  const path = form.jsonPaths[key];
+  return jsonLeaves.value.find((leaf) => leaf.path === path)?.preview || "--";
+}
+
+function updateManualLimit(event: Event) {
+  const value = (event.target as HTMLInputElement).value;
+  form.manualLimit = value === "" ? "" : Number(value);
+
+  if (value !== "") {
+    form.jsonPaths.limit = "";
+  }
+}
+
 function selectJsonLeaf(leaf: JsonLeaf) {
   selectedJsonLeaf.value = leaf;
 }
@@ -414,6 +448,17 @@ function selectJsonLeaf(leaf: JsonLeaf) {
 function setSelectedPath(target: JsonPathKey) {
   if (!selectedJsonLeaf.value) {
     return;
+  }
+
+  if (target === "limit") {
+    form.manualLimit = "";
+  }
+
+  if (target === "unit") {
+    const unit = String(selectedJsonLeaf.value.value ?? "").trim();
+    if (unit) {
+      form.defaultUnit = unit;
+    }
   }
 
   form.jsonPaths[target] = selectedJsonLeaf.value.path;
@@ -858,11 +903,53 @@ onBeforeUnmount(() => {
                 <textarea v-model.trim="form.requestBody" spellcheck="false" rows="4" />
               </label>
 
+              <p class="path-preview-note">
+                <Info :size="14" />
+                <span>右侧路径预览来自测试响应，实际数据会在刷新时实时获取。</span>
+              </p>
+
               <div class="path-map">
-                <label v-for="key in JSON_PATH_KEYS" :key="key" class="field compact-field">
+                <div v-for="key in JSON_PATH_KEYS" :key="key" class="field compact-field">
                   <span>{{ JSON_PATH_LABELS[key] }}路径</span>
-                  <input v-model.trim="form.jsonPaths[key]" autocomplete="off" :required="isJsonPathRequired(key)" />
-                </label>
+                  <div class="path-control">
+                    <span v-if="key === 'limit' && form.manualLimit !== ''" class="path-mode-status">
+                      当前使用手填总额度
+                    </span>
+                    <input
+                      v-else
+                      v-model.trim="form.jsonPaths[key]"
+                      :class="{ 'path-mode-input': key === 'unit' && !form.jsonPaths.unit }"
+                      autocomplete="off"
+                      :aria-label="`${JSON_PATH_LABELS[key]}路径`"
+                      :placeholder="key === 'unit' && !form.jsonPaths.unit ? '当前使用手填单位' : ''"
+                      :required="isJsonPathRequired(key)"
+                    />
+                    <input
+                      v-if="key === 'limit'"
+                      :value="form.manualLimit"
+                      class="path-value path-value-input"
+                      type="number"
+                      step="any"
+                      autocomplete="off"
+                      aria-label="手填总额度"
+                      :placeholder="getJsonPathPreview(key)"
+                      @input="updateManualLimit"
+                    />
+                    <input
+                      v-else-if="key === 'unit'"
+                      v-model.trim="form.defaultUnit"
+                      class="path-value path-value-input"
+                      type="text"
+                      autocomplete="off"
+                      aria-label="默认单位"
+                      :placeholder="getJsonPathPreview(key)"
+                      required
+                    />
+                    <span v-else class="path-value path-value-preview" :title="getJsonPathPreview(key)">
+                      {{ getJsonPathPreview(key) }}
+                    </span>
+                  </div>
+                </div>
               </div>
 
               <section v-if="testResponse !== null" class="json-result">
@@ -898,7 +985,17 @@ onBeforeUnmount(() => {
                   </button>
                 </div>
 
-                <pre class="json-preview">{{ testJsonText }}</pre>
+                <button
+                  class="json-preview-toggle"
+                  type="button"
+                  :aria-expanded="isJsonPreviewOpen"
+                  @click="isJsonPreviewOpen = !isJsonPreviewOpen"
+                >
+                  <span>原始 JSON 响应</span>
+                  <ChevronDown v-if="isJsonPreviewOpen" :size="16" />
+                  <ChevronRight v-else :size="16" />
+                </button>
+                <pre v-if="isJsonPreviewOpen" class="json-preview">{{ testJsonText }}</pre>
               </section>
             </div>
           </section>

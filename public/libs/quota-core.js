@@ -110,6 +110,23 @@ function clampRefreshInterval(value) {
   return Math.min(MAX_REFRESH_MINUTES, Math.max(MIN_REFRESH_MINUTES, rounded));
 }
 
+function normalizeManualLimit(value) {
+  if (value === undefined || value === null || (typeof value === "string" && !value.trim())) {
+    return null;
+  }
+
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue) || numberValue <= 0) {
+    throw new Error("备用总额度必须是大于 0 的数字");
+  }
+
+  return numberValue;
+}
+
+function normalizeDefaultUnit(value) {
+  return String(value || DEFAULT_UNIT).trim() || DEFAULT_UNIT;
+}
+
 function defaultAdvancedHeaders(authPlacement) {
   const placement = normalizeAuthPlacement(authPlacement);
   const headers = {
@@ -275,6 +292,12 @@ function normalizeProviderInput(input, options) {
     ...template.jsonPaths,
     ...((input && input.jsonPaths) || {})
   });
+  const manualLimit = normalizeManualLimit(input && input.manualLimit);
+  const defaultUnit = normalizeDefaultUnit(input && input.defaultUnit);
+
+  if (manualLimit !== null) {
+    jsonPaths.limit = "";
+  }
 
   if (!name) {
     throw new Error("请填写名称");
@@ -288,8 +311,8 @@ function normalizeProviderInput(input, options) {
     throw new Error("Token 放在 Body 时请求方式必须是 POST");
   }
 
-  if (requireJsonPaths && !jsonPaths.balance && (!jsonPaths.limit || !jsonPaths.used)) {
-    throw new Error("请设置余额字段路径，或同时设置总额度和已用余额路径");
+  if (requireJsonPaths && !jsonPaths.balance && ((!jsonPaths.limit && manualLimit === null) || !jsonPaths.used)) {
+    throw new Error("请设置余额字段路径，或同时设置已用余额路径与总额度路径/备用总额度");
   }
 
   return {
@@ -303,7 +326,9 @@ function normalizeProviderInput(input, options) {
     authPlacement,
     requestHeaders,
     requestBody,
-    jsonPaths
+    jsonPaths,
+    manualLimit,
+    defaultUnit
   };
 }
 
@@ -482,14 +507,15 @@ function optionalStringFromPath(response, path, label) {
   return value === undefined || value === null || value === "" ? null : String(value);
 }
 
-function parseProviderBalanceResponse(response, jsonPaths) {
+function parseProviderBalanceResponse(response, jsonPaths, manualLimitValue, defaultUnitValue) {
   if (!response || typeof response !== "object" || Array.isArray(response)) {
     throw new Error("响应不是有效的 JSON 对象");
   }
 
   const paths = normalizeJsonPaths(jsonPaths);
-  const limit = optionalNumberFromPath(response, paths.limit, "总额度字段");
-  const used = optionalNumberFromPath(response, paths.used, "已用余额字段");
+  const manualLimit = normalizeManualLimit(manualLimitValue);
+  const limit = manualLimit ?? optionalNumberFromPath(response, paths.limit, "总额度字段");
+  let used = optionalNumberFromPath(response, paths.used, "已用余额字段");
   let remaining;
 
   if (paths.balance) {
@@ -500,10 +526,14 @@ function parseProviderBalanceResponse(response, jsonPaths) {
     throw new Error("请设置余额字段路径，或同时设置总额度和已用余额路径");
   }
 
+  if (used === null && limit !== null) {
+    used = limit - remaining;
+  }
+
   return {
     isValid: true,
     remaining,
-    unit: optionalStringFromPath(response, paths.unit, "单位字段") || DEFAULT_UNIT,
+    unit: optionalStringFromPath(response, paths.unit, "单位字段") || normalizeDefaultUnit(defaultUnitValue),
     limit,
     used,
     resetAt: optionalStringFromPath(response, paths.resetAt, "重置时间字段")
