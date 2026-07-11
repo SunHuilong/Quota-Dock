@@ -1132,7 +1132,10 @@ p {
 
 .floating-item {
   display: grid;
+  align-content: start;
+  grid-template-rows: auto auto 28px auto;
   gap: 6px;
+  min-height: 126px;
   padding: 10px;
   background: var(--panel);
   border: 1px solid var(--line);
@@ -1185,11 +1188,17 @@ p {
 }
 
 .floating-quota-progress {
+  grid-row: 3;
   margin-top: 0;
   gap: 4px;
 }
 
+.floating-item > small {
+  grid-row: 4;
+}
+
 .floating-error {
+  grid-row: 5;
   color: var(--red) !important;
 }
 
