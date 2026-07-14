@@ -25,6 +25,7 @@
       AUTH_PLACEMENT_HEADER,
       BALANCE_ROUTE,
       DEFAULT_JSON_PATHS,
+      DEFAULT_PRICE_MULTIPLIER,
       DEFAULT_UNIT,
       REQUEST_TIMEOUT_MS,
       REQUEST_METHOD_GET,
@@ -134,6 +135,7 @@
         },
         manualLimit: doc.manualLimit ?? null,
         defaultUnit: String(doc.defaultUnit || DEFAULT_UNIT).trim() || DEFAULT_UNIT,
+        priceMultiplier: doc.priceMultiplier ?? DEFAULT_PRICE_MULTIPLIER,
         refreshIntervalMinutes: doc.refreshIntervalMinutes,
         lastBalance: doc.lastBalance ?? null,
         lastLimit: doc.lastLimit ?? null,
@@ -286,6 +288,7 @@
         jsonPaths: normalized.jsonPaths,
         manualLimit: normalized.manualLimit,
         defaultUnit: normalized.defaultUnit,
+        priceMultiplier: normalized.priceMultiplier,
         refreshIntervalMinutes: normalized.refreshIntervalMinutes,
         lastBalance: existing ? existing.lastBalance ?? null : null,
         lastLimit: existing ? existing.lastLimit ?? null : null,
@@ -371,7 +374,8 @@
           response,
           provider.jsonPaths,
           provider.manualLimit,
-          provider.defaultUnit
+          provider.defaultUnit,
+          provider.priceMultiplier
         );
         const updatedDoc = await putProviderPatch(id, {
           lastBalance: extracted.remaining,

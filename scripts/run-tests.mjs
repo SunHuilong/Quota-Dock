@@ -53,6 +53,7 @@ assert.equal(openAiProvider.jsonPaths.limit, "subscription.daily_limit_usd");
 assert.equal(openAiProvider.jsonPaths.used, "subscription.daily_usage_usd");
 assert.equal(openAiProvider.manualLimit, null);
 assert.equal(openAiProvider.defaultUnit, "USD");
+assert.equal(openAiProvider.priceMultiplier, 1);
 
 const legacyStandardProvider = normalizeProviderInput({
   name: "legacy",
@@ -170,6 +171,45 @@ assert.deepEqual(parseProviderBalanceResponse({ balance: 12 }, { balance: "balan
 });
 assert.deepEqual(
   parseProviderBalanceResponse(
+    { balance: 7000, used: 3000, limit: 10000 },
+    { balance: "balance", used: "used", limit: "limit" },
+    null,
+    "USD",
+    0.001
+  ),
+  {
+    isValid: true,
+    remaining: 7,
+    unit: "USD",
+    limit: 10,
+    used: 3,
+    resetAt: null
+  }
+);
+assert.deepEqual(
+  parseProviderBalanceResponse({ balance: 12000 }, { balance: "balance" }, 12000, "USD", 0.001),
+  {
+    isValid: true,
+    remaining: 12,
+    unit: "USD",
+    limit: 12,
+    used: 0,
+    resetAt: null
+  }
+);
+assert.deepEqual(
+  parseProviderBalanceResponse({ balance: 12000 }, { balance: "balance" }, 10000, "USD", 0.001),
+  {
+    isValid: true,
+    remaining: 12,
+    unit: "USD",
+    limit: 10,
+    used: 0,
+    resetAt: null
+  }
+);
+assert.deepEqual(
+  parseProviderBalanceResponse(
     { balance: 12, unit: "EUR" },
     { balance: "balance", unit: "unit" },
     null,
@@ -232,6 +272,39 @@ const manualLimitProvider = normalizeProviderInput({
 assert.equal(manualLimitProvider.manualLimit, 100.5);
 assert.equal(manualLimitProvider.jsonPaths.limit, "");
 assert.equal(manualLimitProvider.defaultUnit, "CNY");
+assert.equal(
+  normalizeProviderInput({
+    name: "scaled",
+    baseUrl: "https://gateway.example.com",
+    apiKey: "sk-test",
+    templateId: TEMPLATE_CUSTOM,
+    requestPath: "/quota",
+    requestMethod: "GET",
+    authPlacement: "header",
+    requestHeaders: "{}",
+    jsonPaths: { balance: "data.balance" },
+    priceMultiplier: "0.001",
+    refreshIntervalMinutes: 5
+  }).priceMultiplier,
+  0.001
+);
+assert.throws(
+  () =>
+    normalizeProviderInput({
+      name: "invalid multiplier",
+      baseUrl: "https://gateway.example.com",
+      apiKey: "sk-test",
+      templateId: TEMPLATE_CUSTOM,
+      requestPath: "/quota",
+      requestMethod: "GET",
+      authPlacement: "header",
+      requestHeaders: "{}",
+      jsonPaths: { balance: "data.balance" },
+      priceMultiplier: 0,
+      refreshIntervalMinutes: 5
+    }),
+  /价格倍率/
+);
 assert.throws(
   () =>
     normalizeProviderInput({

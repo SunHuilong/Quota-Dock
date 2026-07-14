@@ -163,6 +163,7 @@ const form = reactive({
   jsonPaths: createEmptyJsonPaths(),
   manualLimit: "" as number | "",
   defaultUnit: DEFAULT_UNIT,
+  priceMultiplier: 1,
   refreshIntervalMinutes: 30
 });
 
@@ -231,6 +232,7 @@ function applyTemplatePreset(templateId: TemplateId) {
   Object.assign(form.jsonPaths, createEmptyJsonPaths(), template.jsonPaths);
   form.manualLimit = "";
   form.defaultUnit = DEFAULT_UNIT;
+  form.priceMultiplier = 1;
   isTemplateConfigOpen.value = template.id === "custom";
   resetTestResult();
 }
@@ -315,6 +317,7 @@ function editProvider(provider: QuotaProvider) {
   Object.assign(form.jsonPaths, createEmptyJsonPaths(), provider.jsonPaths || {});
   form.manualLimit = provider.manualLimit ?? "";
   form.defaultUnit = provider.defaultUnit || DEFAULT_UNIT;
+  form.priceMultiplier = provider.priceMultiplier ?? 1;
   isTemplateConfigOpen.value = form.templateId === "custom";
   form.refreshIntervalMinutes = provider.refreshIntervalMinutes;
   showApiKey.value = false;
@@ -385,6 +388,7 @@ function buildProviderInput(): ProviderInput {
     jsonPaths: { ...form.jsonPaths },
     manualLimit: form.manualLimit === "" ? null : form.manualLimit,
     defaultUnit: form.defaultUnit,
+    priceMultiplier: form.priceMultiplier,
     refreshIntervalMinutes: form.refreshIntervalMinutes
   };
 }
@@ -910,6 +914,19 @@ onBeforeUnmount(() => {
               </p>
 
               <div class="path-map">
+                <label class="field compact-field">
+                  <span>价格倍率</span>
+                  <input
+                    v-model.number="form.priceMultiplier"
+                    type="number"
+                    min="0"
+                    step="any"
+                    autocomplete="off"
+                    placeholder="1"
+                    required
+                  />
+                </label>
+
                 <div v-for="key in JSON_PATH_KEYS" :key="key" class="field compact-field">
                   <span>{{ JSON_PATH_LABELS[key] }}路径</span>
                   <div class="path-control">

@@ -24,6 +24,7 @@ export interface QuotaProvider {
   jsonPaths: JsonPathMap;
   manualLimit: number | null;
   defaultUnit: string;
+  priceMultiplier: number;
   refreshIntervalMinutes: number;
   lastBalance: number | null;
   lastLimit: number | null;
@@ -52,6 +53,7 @@ export interface ProviderInput {
   jsonPaths: JsonPathMap;
   manualLimit: number | null;
   defaultUnit: string;
+  priceMultiplier: number;
   refreshIntervalMinutes: number;
 }
 

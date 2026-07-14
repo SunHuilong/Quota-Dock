@@ -2,6 +2,7 @@
 
 const BALANCE_ROUTE = "/v1/usage";
 const DEFAULT_UNIT = "USD";
+const DEFAULT_PRICE_MULTIPLIER = 1;
 const DEFAULT_REFRESH_MINUTES = 30;
 const MIN_REFRESH_MINUTES = 1;
 const MAX_REFRESH_MINUTES = 1440;
@@ -118,6 +119,19 @@ function normalizeManualLimit(value) {
   const numberValue = Number(value);
   if (!Number.isFinite(numberValue) || numberValue <= 0) {
     throw new Error("备用总额度必须是大于 0 的数字");
+  }
+
+  return numberValue;
+}
+
+function normalizePriceMultiplier(value) {
+  if (value === undefined || value === null || (typeof value === "string" && !value.trim())) {
+    return DEFAULT_PRICE_MULTIPLIER;
+  }
+
+  const numberValue = Number(value);
+  if (!Number.isFinite(numberValue) || numberValue <= 0) {
+    throw new Error("价格倍率必须是大于 0 的数字");
   }
 
   return numberValue;
@@ -294,6 +308,7 @@ function normalizeProviderInput(input, options) {
   });
   const manualLimit = normalizeManualLimit(input && input.manualLimit);
   const defaultUnit = normalizeDefaultUnit(input && input.defaultUnit);
+  const priceMultiplier = normalizePriceMultiplier(input && input.priceMultiplier);
 
   if (manualLimit !== null) {
     jsonPaths.limit = "";
@@ -328,7 +343,8 @@ function normalizeProviderInput(input, options) {
     requestBody,
     jsonPaths,
     manualLimit,
-    defaultUnit
+    defaultUnit,
+    priceMultiplier
   };
 }
 
@@ -507,19 +523,27 @@ function optionalStringFromPath(response, path, label) {
   return value === undefined || value === null || value === "" ? null : String(value);
 }
 
-function parseProviderBalanceResponse(response, jsonPaths, manualLimitValue, defaultUnitValue) {
+function parseProviderBalanceResponse(response, jsonPaths, manualLimitValue, defaultUnitValue, priceMultiplierValue) {
   if (!response || typeof response !== "object" || Array.isArray(response)) {
     throw new Error("响应不是有效的 JSON 对象");
   }
 
   const paths = normalizeJsonPaths(jsonPaths);
   const manualLimit = normalizeManualLimit(manualLimitValue);
-  const limit = manualLimit ?? optionalNumberFromPath(response, paths.limit, "总额度字段");
+  const priceMultiplier = normalizePriceMultiplier(priceMultiplierValue);
+  const responseLimit = optionalNumberFromPath(response, paths.limit, "总额度字段");
+  const rawLimit = manualLimit ?? responseLimit;
+  const limit = rawLimit === null ? null : rawLimit * priceMultiplier;
   let used = optionalNumberFromPath(response, paths.used, "已用余额字段");
   let remaining;
 
+  if (used !== null) {
+    used *= priceMultiplier;
+  }
+
   if (paths.balance) {
-    remaining = toFiniteNumber(readJsonPathValue(response, paths.balance, "余额字段"), "余额字段");
+    remaining =
+      toFiniteNumber(readJsonPathValue(response, paths.balance, "余额字段"), "余额字段") * priceMultiplier;
   } else if (limit !== null && used !== null) {
     remaining = limit - used;
   } else {
@@ -527,7 +551,7 @@ function parseProviderBalanceResponse(response, jsonPaths, manualLimitValue, def
   }
 
   if (used === null && limit !== null) {
-    used = limit - remaining;
+    used = Math.max(0, limit - remaining);
   }
 
   return {
@@ -649,6 +673,7 @@ function createResponseErrorMessage(message, detail) {
 module.exports = {
   BALANCE_ROUTE,
   DEFAULT_UNIT,
+  DEFAULT_PRICE_MULTIPLIER,
   DEFAULT_REFRESH_MINUTES,
   MIN_REFRESH_MINUTES,
   MAX_REFRESH_MINUTES,
