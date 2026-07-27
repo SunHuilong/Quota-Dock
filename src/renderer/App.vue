@@ -639,9 +639,6 @@ onBeforeUnmount(() => {
   <main class="app-shell">
     <section class="top-bar">
       <div class="brand-block compact-brand">
-        <div class="brand-mark">
-          <WalletCards :size="20" />
-        </div>
         <div>
           <h1>AI 额度查询</h1>
           <p>{{ providerCount }} 个站点</p>

@@ -91,7 +91,6 @@ onBeforeUnmount(() => {
   <main class="floating-shell">
     <header class="floating-header">
       <div class="floating-title">
-        <WalletCards :size="20" />
         <span>AI 额度</span>
       </div>
       <div class="floating-actions">
