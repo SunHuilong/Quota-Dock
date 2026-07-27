@@ -21,6 +21,7 @@
     const https = require("https");
     const path = require("path");
     const { URL } = require("url");
+    const { createProviderStore } = require("./libs/provider-store.js");
     const {
       AUTH_PLACEMENT_HEADER,
       BALANCE_ROUTE,
@@ -42,7 +43,6 @@
       createResponseErrorMessage
     } = require("./libs/quota-core.js");
 
-    const PROVIDER_PREFIX = "quota-provider/";
     const API_KEY_PREFIX = "quota-api-key/";
     const FLOATING_WINDOW_WIDTH = 360;
     const FLOATING_WINDOW_MIN_HEIGHT = 188;
@@ -66,9 +66,14 @@
       return utoolsApi;
     }
 
-    function providerDocId(id) {
-      return `${PROVIDER_PREFIX}${id}`;
-    }
+    const {
+      providerDocId,
+      idFromDoc,
+      getProviderDoc,
+      listProviderDocs,
+      putProviderPatch,
+      deleteProviderDoc
+    } = createProviderStore(() => requireUtools().db.promises);
 
     function getFloatingWindowHeight(providerCount) {
       return Math.min(
@@ -83,10 +88,6 @@
 
     function apiKeyStorageKey(id) {
       return `${API_KEY_PREFIX}${id}`;
-    }
-
-    function idFromDoc(doc) {
-      return String(doc._id || "").slice(PROVIDER_PREFIX.length);
     }
 
     function createProviderId() {
@@ -149,37 +150,6 @@
         updatedAt: doc.updatedAt,
         hasApiKey: Boolean(api.dbCryptoStorage.getItem(apiKeyStorageKey(id)))
       };
-    }
-
-    async function getProviderDoc(id) {
-      const api = requireUtools();
-      const doc = await api.db.promises.get(providerDocId(id));
-
-      if (!doc || doc._deleted) {
-        throw new Error("站点不存在");
-      }
-
-      return doc;
-    }
-
-    async function listProviderDocs() {
-      const api = requireUtools();
-      const docs = await api.db.promises.allDocs(PROVIDER_PREFIX);
-
-      return docs
-        .filter((doc) => doc && !doc._deleted)
-        .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
-    }
-
-    async function putProviderPatch(id, patch) {
-      const api = requireUtools();
-      const current = await getProviderDoc(id);
-      const result = await api.db.promises.put({
-        ...current,
-        ...patch
-      });
-      assertDbResult(result, "保存站点");
-      return getProviderDoc(id);
     }
 
     function createResponseError(message, detail) {
@@ -331,9 +301,11 @@
 
     async function deleteProvider(id) {
       const api = requireUtools();
-      const doc = await getProviderDoc(id);
-      const result = await api.db.promises.remove(doc);
-      assertDbResult(result, "删除站点");
+      const deletion = await deleteProviderDoc(id);
+
+      if (deletion.removeError && typeof console !== "undefined" && console.warn) {
+        console.warn("[quota-dock] 删除标记已保存，但物理清理站点文档失败", deletion.removeError);
+      }
 
       try {
         const apiKey = api.dbCryptoStorage.getItem(apiKeyStorageKey(id));

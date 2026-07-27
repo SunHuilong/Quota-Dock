@@ -23,6 +23,91 @@ const {
   summarizeResponseBody,
   shouldRefreshProvider
 } = require("../public/libs/quota-core.js");
+const {
+  PROVIDER_PREFIX,
+  DELETED_PROVIDER_PREFIX,
+  createProviderStore
+} = require("../public/libs/provider-store.js");
+
+function clone(value) {
+  return value === null || value === undefined ? value : JSON.parse(JSON.stringify(value));
+}
+
+class RevisionDbMock {
+  constructor() {
+    this.docs = new Map();
+    this.sequence = 0;
+    this.removeConflicts = new Map();
+  }
+
+  nextRevision(current) {
+    const generation = current ? Number.parseInt(String(current._rev || "0"), 10) + 1 : 1;
+    this.sequence += 1;
+    return `${generation}-mock-${this.sequence}`;
+  }
+
+  async get(id) {
+    const doc = this.docs.get(id);
+    return doc && !doc._deleted ? clone(doc) : null;
+  }
+
+  async allDocs(prefix) {
+    return [...this.docs.values()]
+      .filter((doc) => doc._id.startsWith(prefix) && !doc._deleted)
+      .map(clone);
+  }
+
+  async put(doc) {
+    const current = this.docs.get(doc._id);
+
+    if ((current && doc._rev !== current._rev) || (!current && doc._rev)) {
+      return { ok: false, message: "conflict" };
+    }
+
+    const stored = {
+      ...clone(doc),
+      _rev: this.nextRevision(current)
+    };
+    this.docs.set(doc._id, stored);
+    return { id: doc._id, ok: true, rev: stored._rev };
+  }
+
+  async remove(doc) {
+    const current = this.docs.get(doc._id);
+    const remainingConflicts = this.removeConflicts.get(doc._id) || 0;
+
+    if (remainingConflicts > 0 && current && !current._deleted) {
+      this.removeConflicts.set(doc._id, remainingConflicts - 1);
+      this.forceRestore({ ...current, conflictWrite: remainingConflicts });
+      return { ok: false, message: "conflict" };
+    }
+
+    if (!current || current._deleted || doc._rev !== current._rev) {
+      return { ok: false, message: "conflict" };
+    }
+
+    const deleted = {
+      ...current,
+      _deleted: true,
+      _rev: this.nextRevision(current)
+    };
+    this.docs.set(doc._id, deleted);
+    return { id: doc._id, ok: true, rev: deleted._rev };
+  }
+
+  forceRestore(doc) {
+    const current = this.docs.get(doc._id);
+    this.docs.set(doc._id, {
+      ...clone(doc),
+      _rev: this.nextRevision(current),
+      _deleted: false
+    });
+  }
+
+  failNextRemovals(id, count) {
+    this.removeConflicts.set(id, count);
+  }
+}
 
 assert.equal(normalizeBaseUrl("https://gateway.example.com/"), "https://gateway.example.com");
 assert.equal(normalizeRequestPath("quota/check?type=daily"), "/quota/check?type=daily");
@@ -417,4 +502,47 @@ assert.equal(
   false
 );
 
-console.log("Core quota tests passed");
+const revisionDb = new RevisionDbMock();
+const providerStore = createProviderStore(() => revisionDb);
+const providerDocs = [
+  { id: "first", createdAt: "2026-07-08T09:00:00.000Z", lastBalance: 10 },
+  { id: "second", createdAt: "2026-07-08T09:01:00.000Z", lastBalance: 20 },
+  { id: "third", createdAt: "2026-07-08T09:02:00.000Z", lastBalance: 30 }
+];
+
+for (const provider of providerDocs) {
+  const result = await revisionDb.put({
+    _id: `${PROVIDER_PREFIX}${provider.id}`,
+    ...provider
+  });
+  assert.equal(result.ok, true);
+}
+
+assert.deepEqual((await providerStore.listProviderDocs()).map(providerStore.idFromDoc), ["first", "second", "third"]);
+
+const secondDocId = `${PROVIDER_PREFIX}second`;
+revisionDb.failNextRemovals(secondDocId, 10);
+const deletion = await providerStore.deleteProviderDoc("second");
+assert.equal(deletion.hardDeleted, false);
+assert.match(deletion.removeError.message, /conflict/);
+assert.ok(await revisionDb.get(`${DELETED_PROVIDER_PREFIX}second`));
+assert.deepEqual((await providerStore.listProviderDocs()).map(providerStore.idFromDoc), ["first", "third"]);
+
+revisionDb.forceRestore({
+  _id: secondDocId,
+  id: "second",
+  createdAt: "2026-07-08T09:01:00.000Z",
+  lastBalance: 99
+});
+assert.ok(await revisionDb.get(secondDocId));
+assert.deepEqual((await providerStore.listProviderDocs()).map(providerStore.idFromDoc), ["first", "third"]);
+await assert.rejects(() => providerStore.getProviderDoc("second"), /站点已删除/);
+await assert.rejects(() => providerStore.putProviderPatch("second", { lastBalance: 100 }), /站点已删除/);
+
+revisionDb.failNextRemovals(secondDocId, 0);
+const repeatedDeletion = await providerStore.deleteProviderDoc("second");
+assert.equal(repeatedDeletion.hardDeleted, true);
+assert.equal(await revisionDb.get(secondDocId), null);
+assert.deepEqual((await providerStore.listProviderDocs()).map(providerStore.idFromDoc), ["first", "third"]);
+
+console.log("Core quota and provider deletion tests passed");
