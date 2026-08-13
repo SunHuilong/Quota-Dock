@@ -16,6 +16,7 @@ const {
   getProviderTemplates,
   normalizeBaseUrl,
   normalizeBodyForJson,
+  normalizeQuotaSnapshot,
   normalizeProviderInput,
   normalizeRequestPath,
   parseProviderBalanceResponse,
@@ -23,6 +24,12 @@ const {
   summarizeResponseBody,
   shouldRefreshProvider
 } = require("../public/libs/quota-core.js");
+const {
+  executeOfficialProvider,
+  listOfficialProviderPresets,
+  normalizeOfficialProviderInput,
+  parseOfficialProviderResponse
+} = require("../public/libs/official-provider-presets.js");
 const {
   PROVIDER_PREFIX,
   DELETED_PROVIDER_PREFIX,
@@ -502,6 +509,242 @@ assert.equal(
   false
 );
 
+const presetSummaries = listOfficialProviderPresets();
+assert.deepEqual(
+  presetSummaries.map((preset) => preset.id),
+  [
+    "deepseek-api",
+    "kimi-api-cn",
+    "kimi-api-global",
+    "stepfun-api",
+    "siliconflow-cn",
+    "siliconflow-global",
+    "302ai",
+    "novita-ai",
+    "openrouter-key",
+    "minimax-token-plan",
+    "glm-coding-plan-cn",
+    "zai-coding-plan",
+    "xai-billing",
+    "openai-organization",
+    "anthropic-organization",
+    "openrouter-credits",
+    "aihubmix"
+  ]
+);
+assert.ok(presetSummaries.every((preset) => !("url" in preset) && !("headers" in preset)));
+assert.equal(presetSummaries.find((preset) => preset.id === "xai-billing").credentialLabel, "Management Key");
+assert.equal(presetSummaries.find((preset) => preset.id === "openai-organization").credentialLabel, "Admin API Key");
+
+assert.deepEqual(
+  normalizeOfficialProviderInput({
+    mode: "official",
+    officialPresetId: "deepseek-api",
+    name: "",
+    apiKey: " key ",
+    manualLimit: "100",
+    currencyOverride: " cny ",
+    refreshIntervalMinutes: 45
+  }),
+  {
+    mode: "official",
+    officialPresetId: "deepseek-api",
+    name: "DeepSeek API",
+    apiKey: "key",
+    manualLimit: 100,
+    currencyOverride: "CNY",
+    refreshIntervalMinutes: 45
+  }
+);
+assert.throws(
+  () =>
+    normalizeOfficialProviderInput({
+      mode: "official",
+      officialPresetId: "missing",
+      apiKey: "key"
+    }),
+  /预设平台不可用/
+);
+
+const serverLimitSnapshot = normalizeQuotaSnapshot(
+  {
+    primaryMeterId: "quota",
+    meters: [
+      {
+        id: "quota",
+        label: "额度",
+        kind: "quota",
+        remaining: 20,
+        used: 30,
+        limit: 50,
+        unit: "USD",
+        resetAt: null,
+        aggregate: false
+      }
+    ]
+  },
+  { manualLimit: 100, currencyOverride: "CNY" }
+);
+assert.equal(serverLimitSnapshot.meters[0].limit, 50);
+assert.equal(serverLimitSnapshot.meters[0].unit, "CNY");
+
+const deepSeekSnapshot = parseOfficialProviderResponse(
+  "deepseek-api",
+  {
+    is_available: true,
+    balance_infos: [
+      { currency: "CNY", total_balance: "88.5" },
+      { currency: "USD", total_balance: "3.25" }
+    ]
+  },
+  { manualLimit: 100 }
+);
+assert.equal(deepSeekSnapshot.meters.length, 2);
+assert.equal(deepSeekSnapshot.meters[0].remaining, 88.5);
+assert.equal(deepSeekSnapshot.meters[0].limit, 100);
+assert.equal(deepSeekSnapshot.meters[1].unit, "USD");
+
+const simplePresetFixtures = [
+  ["kimi-api-cn", { data: { available_balance: "12.5" } }, 12.5, "CNY"],
+  ["kimi-api-global", { data: { balance: 9 } }, 9, "USD"],
+  ["stepfun-api", { data: { balance: "30" } }, 30, "CNY"],
+  ["siliconflow-cn", { data: { balance: "42" } }, 42, "CNY"],
+  ["siliconflow-global", { data: { totalBalance: "7.5" } }, 7.5, "USD"],
+  ["302ai", { data: { balance: 6 } }, 6, "USD"],
+  ["novita-ai", { data: { balance: 123400 } }, 12.34, "USD"],
+  ["aihubmix", { data: { quota: 2500000 } }, 5, "USD"]
+];
+for (const [presetId, fixture, expectedRemaining, expectedUnit] of simplePresetFixtures) {
+  const snapshot = parseOfficialProviderResponse(presetId, fixture);
+  assert.equal(snapshot.meters[0].remaining, expectedRemaining, presetId);
+  assert.equal(snapshot.meters[0].unit, expectedUnit, presetId);
+}
+
+const openRouterKeySnapshot = parseOfficialProviderResponse("openrouter-key", {
+  data: { limit: 20, usage: 7, limit_remaining: 13 }
+});
+assert.deepEqual(
+  {
+    kind: openRouterKeySnapshot.meters[0].kind,
+    remaining: openRouterKeySnapshot.meters[0].remaining,
+    used: openRouterKeySnapshot.meters[0].used,
+    limit: openRouterKeySnapshot.meters[0].limit,
+    aggregate: openRouterKeySnapshot.meters[0].aggregate
+  },
+  { kind: "quota", remaining: 13, used: 7, limit: 20, aggregate: false }
+);
+
+const openRouterCreditsSnapshot = parseOfficialProviderResponse("openrouter-credits", {
+  data: { total_credits: 50, total_usage: 18.25 }
+});
+assert.equal(openRouterCreditsSnapshot.meters[0].remaining, 31.75);
+assert.equal(openRouterCreditsSnapshot.meters[0].aggregate, true);
+
+const miniMaxSnapshot = parseOfficialProviderResponse("minimax-token-plan", {
+  data: {
+    remains: [
+      { model_name: "MiniMax-M2", total_count: 1000, used_count: 250, remain_count: 750 },
+      { model_name: "MiniMax-M2-fast", total_count: 500, remain_count: 400 }
+    ]
+  }
+});
+assert.equal(miniMaxSnapshot.meters.length, 2);
+assert.equal(miniMaxSnapshot.meters[0].remaining, 750);
+assert.equal(miniMaxSnapshot.meters[0].aggregate, false);
+assert.equal(
+  normalizeOfficialProviderInput({
+    mode: "official",
+    officialPresetId: "minimax-token-plan",
+    apiKey: "key",
+    manualLimit: 100,
+    currencyOverride: "USD",
+    refreshIntervalMinutes: 30
+  }).currencyOverride,
+  ""
+);
+
+const glmSnapshot = parseOfficialProviderResponse("glm-coding-plan-cn", {
+  quota: {
+    data: {
+      limits: [
+        { type: "TOKENS_LIMIT", limit: 10000, currentValue: 2500, remaining: 7500, unit: "Tokens" }
+      ]
+    }
+  },
+  models: { data: { items: [{ modelName: "GLM-4.5", usage: 1200, unit: "Tokens" }] } },
+  tools: { data: { items: [{ name: "Web Search", usage: 8, unit: "次" }] } }
+});
+assert.equal(glmSnapshot.meters.length, 3);
+assert.equal(glmSnapshot.meters[0].remaining, 7500);
+
+const xaiSnapshot = parseOfficialProviderResponse("xai-billing", {
+  prepaid: { total: { val: "-1250" } },
+  preview: {
+    effectiveSpendingLimit: "20000",
+    coreInvoice: { totalWithCorr: { val: "3500" } }
+  }
+});
+assert.equal(xaiSnapshot.meters[0].remaining, 12.5);
+assert.deepEqual(
+  [xaiSnapshot.meters[1].remaining, xaiSnapshot.meters[1].used, xaiSnapshot.meters[1].limit],
+  [165, 35, 200]
+);
+
+const openAiOrganizationSnapshot = parseOfficialProviderResponse("openai-organization", {
+  limit: { currency: "USD", threshold_amount: 10000 },
+  costPages: [
+    { data: [{ results: [{ amount: { value: 12.5, currency: "usd" } }] }] },
+    { data: [{ results: [{ amount: { value: 7.25, currency: "usd" } }] }] }
+  ]
+});
+assert.deepEqual(
+  [
+    openAiOrganizationSnapshot.meters[0].remaining,
+    openAiOrganizationSnapshot.meters[0].used,
+    openAiOrganizationSnapshot.meters[0].limit
+  ],
+  [80.25, 19.75, 100]
+);
+assert.equal(openAiOrganizationSnapshot.meters[0].aggregate, false);
+
+const anthropicSnapshot = parseOfficialProviderResponse("anthropic-organization", [
+  { data: [{ results: [{ amount: "350", currency: "USD" }, { amount: "125", currency: "USD" }] }] }
+]);
+assert.equal(anthropicSnapshot.meters[0].used, 4.75);
+assert.equal(anthropicSnapshot.meters[0].remaining, null);
+
+const recordedRequests = [];
+const executedDeepSeek = await executeOfficialProvider(
+  "deepseek-api",
+  "sk-test",
+  async (config) => {
+    recordedRequests.push(config);
+    return { is_available: true, balance_infos: [{ currency: "CNY", total_balance: "10" }] };
+  },
+  {}
+);
+assert.equal(executedDeepSeek.meters[0].remaining, 10);
+assert.equal(recordedRequests[0].url, "https://api.deepseek.com/user/balance");
+assert.equal(recordedRequests[0].headers.Authorization, "Bearer sk-test");
+
+const xaiRequestUrls = [];
+const executedXai = await executeOfficialProvider("xai-billing", "xai-management", async (config) => {
+  xaiRequestUrls.push(config.url);
+  if (config.url.endsWith("/auth/management-keys/validation")) {
+    return { scope: "SCOPE_TEAM", scopeId: "team-123" };
+  }
+  if (config.url.endsWith("/prepaid/balance")) {
+    return { total: { val: "-500" } };
+  }
+  return { effectiveSpendingLimit: "10000", coreInvoice: { totalWithCorr: { val: "2500" } } };
+});
+assert.equal(executedXai.meters[0].remaining, 5);
+assert.deepEqual(xaiRequestUrls, [
+  "https://management-api.x.ai/auth/management-keys/validation",
+  "https://management-api.x.ai/v1/billing/teams/team-123/prepaid/balance",
+  "https://management-api.x.ai/v1/billing/teams/team-123/postpaid/invoice/preview"
+]);
+
 const revisionDb = new RevisionDbMock();
 const providerStore = createProviderStore(() => revisionDb);
 const providerDocs = [
@@ -545,4 +788,133 @@ assert.equal(repeatedDeletion.hardDeleted, true);
 assert.equal(await revisionDb.get(secondDocId), null);
 assert.deepEqual((await providerStore.listProviderDocs()).map(providerStore.idFromDoc), ["first", "third"]);
 
-console.log("Core quota and provider deletion tests passed");
+const preloadDb = new RevisionDbMock();
+const encryptedValues = new Map();
+const previousWindow = globalThis.window;
+const previousUtools = globalThis.utools;
+globalThis.window = {};
+globalThis.utools = {
+  db: { promises: preloadDb },
+  dbCryptoStorage: {
+    getItem(key) {
+      return encryptedValues.get(key) || "";
+    },
+    setItem(key, value) {
+      encryptedValues.set(key, value);
+    },
+    async removeItem(key) {
+      encryptedValues.delete(key);
+    }
+  }
+};
+
+require("../public/preload.js");
+const preloadBridge = globalThis.window.quotaBridge;
+assert.ok(preloadBridge);
+assert.ok((await preloadBridge.listOfficialProviderPresets()).length >= 17);
+
+const savedOfficial = await preloadBridge.saveProvider({
+  mode: "official",
+  name: "",
+  officialPresetId: "deepseek-api",
+  apiKey: "sk-official",
+  manualLimit: null,
+  currencyOverride: "",
+  refreshIntervalMinutes: 30
+});
+assert.equal(savedOfficial.mode, "official");
+assert.equal(savedOfficial.name, "DeepSeek API");
+assert.equal(savedOfficial.baseUrl, "");
+assert.equal(savedOfficial.hasApiKey, true);
+
+const persistedOfficial = (await preloadDb.allDocs(PROVIDER_PREFIX)).find(
+  (doc) => doc._id === `${PROVIDER_PREFIX}${savedOfficial.id}`
+);
+for (const forbiddenField of [
+  "baseUrl",
+  "templateId",
+  "requestPath",
+  "requestMethod",
+  "authPlacement",
+  "requestHeaders",
+  "requestBody",
+  "jsonPaths",
+  "defaultUnit",
+  "priceMultiplier"
+]) {
+  assert.equal(Object.hasOwn(persistedOfficial, forbiddenField), false, forbiddenField);
+}
+
+await preloadDb.put({
+  _id: `${PROVIDER_PREFIX}legacy-relay`,
+  name: "Legacy relay",
+  baseUrl: "https://gateway.example.com",
+  templateId: "custom",
+  requestPath: "/quota",
+  requestMethod: "GET",
+  authPlacement: "header",
+  requestHeaders: "{}",
+  requestBody: "",
+  jsonPaths: { balance: "balance" },
+  manualLimit: null,
+  defaultUnit: "CNY",
+  priceMultiplier: 1,
+  refreshIntervalMinutes: 30,
+  lastBalance: 66,
+  lastLimit: 100,
+  lastUsed: 34,
+  lastResetAt: null,
+  lastUnit: "CNY",
+  lastCheckedAt: "2026-07-08T10:00:00.000Z",
+  lastError: "",
+  createdAt: "2026-07-08T09:00:00.000Z",
+  updatedAt: "2026-07-08T10:00:00.000Z"
+});
+await preloadDb.put({
+  _id: `${PROVIDER_PREFIX}unknown-official`,
+  mode: "official",
+  name: "Retired preset",
+  officialPresetId: "retired-provider",
+  refreshIntervalMinutes: 30,
+  lastPrimaryMeterId: "balance",
+  lastMeters: [
+    {
+      id: "balance",
+      label: "可用余额",
+      kind: "balance",
+      remaining: 5,
+      used: null,
+      limit: null,
+      unit: "USD",
+      resetAt: null,
+      aggregate: true
+    }
+  ],
+  lastCheckedAt: "2026-07-08T10:00:00.000Z",
+  lastError: "",
+  createdAt: "2026-07-08T09:30:00.000Z",
+  updatedAt: "2026-07-08T10:00:00.000Z"
+});
+
+const migratedProviders = await preloadBridge.listProviders();
+const migratedRelay = migratedProviders.find((provider) => provider.id === "legacy-relay");
+assert.equal(migratedRelay.mode, "relay");
+assert.equal(migratedRelay.lastMeters[0].remaining, 66);
+assert.equal(migratedRelay.lastMeters[0].unit, "CNY");
+const unknownOfficial = migratedProviders.find((provider) => provider.id === "unknown-official");
+assert.equal(unknownOfficial.mode, "official");
+assert.equal(unknownOfficial.officialPresetAvailable, false);
+assert.equal(unknownOfficial.lastMeters[0].remaining, 5);
+
+if (previousWindow === undefined) {
+  delete globalThis.window;
+} else {
+  globalThis.window = previousWindow;
+}
+if (previousUtools === undefined) {
+  delete globalThis.utools;
+} else {
+  globalThis.utools = previousUtools;
+}
+
+console.log("Core quota, official presets, migration, and provider deletion tests passed");

@@ -23,11 +23,20 @@
     const { URL } = require("url");
     const { createProviderStore } = require("./libs/provider-store.js");
     const {
+      executeOfficialProvider,
+      getOfficialProviderPreset,
+      getOfficialProviderPresetSummary,
+      listOfficialProviderPresets,
+      normalizeOfficialProviderInput
+    } = require("./libs/official-provider-presets.js");
+    const {
       AUTH_PLACEMENT_HEADER,
       BALANCE_ROUTE,
       DEFAULT_JSON_PATHS,
       DEFAULT_PRICE_MULTIPLIER,
       DEFAULT_UNIT,
+      PROVIDER_MODE_OFFICIAL,
+      PROVIDER_MODE_RELAY,
       REQUEST_TIMEOUT_MS,
       REQUEST_METHOD_GET,
       buildProviderRequestConfig,
@@ -36,8 +45,12 @@
       getProviderTemplate,
       normalizeProviderInput,
       normalizeBodyForJson,
+      normalizeProviderMode,
       normalizeTemplateId,
+      normalizeQuotaSnapshot,
       parseProviderBalanceResponse,
+      quotaSnapshotFromLegacy,
+      quotaSnapshotToLegacyFields,
       safeErrorMessage,
       shouldRefreshProvider,
       createResponseErrorMessage
@@ -107,42 +120,81 @@
       throw new Error(message);
     }
 
+    function getStoredSnapshot(doc) {
+      const hasMeters = Array.isArray(doc.lastMeters) && doc.lastMeters.length > 0;
+      const hasLegacyValues = [doc.lastBalance, doc.lastLimit, doc.lastUsed].some(
+        (value) => value !== undefined && value !== null
+      );
+
+      if (!hasMeters && !hasLegacyValues) {
+        return { primaryMeterId: "", meters: [] };
+      }
+
+      return quotaSnapshotFromLegacy(doc);
+    }
+
     function toRendererProvider(doc) {
       const api = requireUtools();
       const id = idFromDoc(doc);
+      const mode = normalizeProviderMode(doc.mode);
       const templateId = normalizeTemplateId(doc.templateId, doc.mode);
       const template = getProviderTemplate(templateId);
+      const officialPreset = mode === PROVIDER_MODE_OFFICIAL ? getOfficialProviderPreset(doc.officialPresetId) : null;
+      const officialSummary = officialPreset ? getOfficialProviderPresetSummary(officialPreset) : null;
+      const snapshot = getStoredSnapshot(doc);
+      const legacyFields = quotaSnapshotToLegacyFields(snapshot);
 
       return {
         id,
-        name: doc.name,
-        baseUrl: doc.baseUrl,
+        mode,
+        name: doc.name || (officialSummary && officialSummary.name) || "未命名站点",
+        officialPresetId: mode === PROVIDER_MODE_OFFICIAL ? String(doc.officialPresetId || "") : null,
+        officialPresetName: officialSummary ? officialSummary.name : null,
+        officialPresetAvailable: mode !== PROVIDER_MODE_OFFICIAL || Boolean(officialPreset),
+        baseUrl: mode === PROVIDER_MODE_RELAY ? doc.baseUrl : "",
         templateId,
-        requestPath: doc.requestPath || template.requestPath || BALANCE_ROUTE,
-        requestMethod: doc.requestMethod || template.requestMethod || REQUEST_METHOD_GET,
-        authPlacement: doc.authPlacement || template.authPlacement || AUTH_PLACEMENT_HEADER,
+        requestPath: mode === PROVIDER_MODE_RELAY ? doc.requestPath || template.requestPath || BALANCE_ROUTE : "",
+        requestMethod:
+          mode === PROVIDER_MODE_RELAY ? doc.requestMethod || template.requestMethod || REQUEST_METHOD_GET : REQUEST_METHOD_GET,
+        authPlacement:
+          mode === PROVIDER_MODE_RELAY ? doc.authPlacement || template.authPlacement || AUTH_PLACEMENT_HEADER : AUTH_PLACEMENT_HEADER,
         requestHeaders:
-          doc.requestHeaders ||
-          template.requestHeaders ||
-          getDefaultAdvancedHeadersText(doc.authPlacement || AUTH_PLACEMENT_HEADER),
+          mode === PROVIDER_MODE_RELAY
+            ? doc.requestHeaders ||
+              template.requestHeaders ||
+              getDefaultAdvancedHeadersText(doc.authPlacement || AUTH_PLACEMENT_HEADER)
+            : "",
         requestBody:
-          doc.requestBody ||
-          template.requestBody ||
-          getDefaultAdvancedBodyText(doc.authPlacement || AUTH_PLACEMENT_HEADER),
-        jsonPaths: {
-          ...DEFAULT_JSON_PATHS,
-          ...template.jsonPaths,
-          ...(doc.jsonPaths || {})
-        },
+          mode === PROVIDER_MODE_RELAY
+            ? doc.requestBody ||
+              template.requestBody ||
+              getDefaultAdvancedBodyText(doc.authPlacement || AUTH_PLACEMENT_HEADER)
+            : "",
+        jsonPaths:
+          mode === PROVIDER_MODE_RELAY
+            ? {
+                ...DEFAULT_JSON_PATHS,
+                ...template.jsonPaths,
+                ...(doc.jsonPaths || {})
+              }
+            : { ...DEFAULT_JSON_PATHS },
         manualLimit: doc.manualLimit ?? null,
-        defaultUnit: String(doc.defaultUnit || DEFAULT_UNIT).trim() || DEFAULT_UNIT,
-        priceMultiplier: doc.priceMultiplier ?? DEFAULT_PRICE_MULTIPLIER,
+        currencyOverride: String(doc.currencyOverride || "").trim(),
+        defaultUnit:
+          String(
+            mode === PROVIDER_MODE_OFFICIAL
+              ? (officialSummary && officialSummary.defaultUnit) || doc.lastUnit || DEFAULT_UNIT
+              : doc.defaultUnit || DEFAULT_UNIT
+          ).trim() || DEFAULT_UNIT,
+        priceMultiplier: mode === PROVIDER_MODE_RELAY ? doc.priceMultiplier ?? DEFAULT_PRICE_MULTIPLIER : 1,
         refreshIntervalMinutes: doc.refreshIntervalMinutes,
-        lastBalance: doc.lastBalance ?? null,
-        lastLimit: doc.lastLimit ?? null,
-        lastUsed: doc.lastUsed ?? null,
-        lastResetAt: doc.lastResetAt ?? null,
-        lastUnit: String(doc.lastUnit || doc.defaultUnit || DEFAULT_UNIT).trim() || DEFAULT_UNIT,
+        lastPrimaryMeterId: legacyFields.lastPrimaryMeterId,
+        lastMeters: legacyFields.lastMeters,
+        lastBalance: legacyFields.lastBalance,
+        lastLimit: legacyFields.lastLimit,
+        lastUsed: legacyFields.lastUsed,
+        lastResetAt: legacyFields.lastResetAt,
+        lastUnit: legacyFields.lastUnit,
         lastIsValid: doc.lastIsValid ?? null,
         lastCheckedAt: doc.lastCheckedAt ?? null,
         lastError: doc.lastError ?? "",
@@ -152,11 +204,17 @@
       };
     }
 
-    function createResponseError(message, detail) {
+    function createResponseError(message, detail, sanitize) {
+      if (sanitize) {
+        const status = detail && detail.statusCode ? `（HTTP ${detail.statusCode}）` : "";
+        return new Error(`${message}${status}`);
+      }
+
       return new Error(createResponseErrorMessage(message, detail));
     }
 
-    function requestJson(config, timeoutMs) {
+    function requestJson(config, timeoutMs, options) {
+      const sanitize = Boolean(options && options.sanitizeErrors);
       return new Promise((resolve, reject) => {
         const parsed = new URL(config.url);
         const client = parsed.protocol === "http:" ? http : https;
@@ -185,20 +243,27 @@
               detail.body = body;
 
               if (!response.statusCode || response.statusCode < 200 || response.statusCode >= 300) {
-                reject(createResponseError("请求返回非成功状态", detail));
+                reject(createResponseError("请求返回非成功状态", detail, sanitize));
                 return;
               }
 
               try {
                 resolve(JSON.parse(normalizeBodyForJson(body)));
               } catch {
-                reject(createResponseError("响应不是有效的 JSON", detail));
+                reject(createResponseError("响应不是有效的 JSON", detail, sanitize));
               }
             });
           }
         );
 
-        request.on("error", reject);
+        request.on("error", (error) => {
+          if (sanitize) {
+            const code = error && error.code ? `（${error.code}）` : "";
+            reject(new Error(`网络请求失败${code}`));
+            return;
+          }
+          reject(error);
+        });
         request.setTimeout(timeoutMs, () => {
           request.destroy(new Error("请求超时"));
         });
@@ -237,40 +302,71 @@
       return docs.map(toRendererProvider);
     }
 
-    async function saveProvider(input) {
-      const api = requireUtools();
-      const id = input && input.id ? String(input.id) : createProviderId();
-      const existing = input && input.id ? await getProviderDoc(id) : null;
-      const normalized = normalizeProviderInput(input, { isUpdate: Boolean(existing) });
-      const now = new Date().toISOString();
+    async function listPresetSummaries() {
+      return listOfficialProviderPresets();
+    }
 
-      const doc = {
-        ...(existing || {}),
+    function createPersistedBase(id, existing, normalized, now) {
+      const snapshot = existing ? getStoredSnapshot(existing) : { primaryMeterId: "", meters: [] };
+      const snapshotFields = quotaSnapshotToLegacyFields(snapshot);
+
+      return {
         _id: providerDocId(id),
+        ...(existing && existing._rev ? { _rev: existing._rev } : {}),
+        mode: normalized.mode,
         name: normalized.name,
-        baseUrl: normalized.baseUrl,
-        templateId: normalized.templateId,
-        requestPath: normalized.requestPath,
-        requestMethod: normalized.requestMethod,
-        authPlacement: normalized.authPlacement,
-        requestHeaders: normalized.requestHeaders,
-        requestBody: normalized.requestBody,
-        jsonPaths: normalized.jsonPaths,
         manualLimit: normalized.manualLimit,
-        defaultUnit: normalized.defaultUnit,
-        priceMultiplier: normalized.priceMultiplier,
         refreshIntervalMinutes: normalized.refreshIntervalMinutes,
-        lastBalance: existing ? existing.lastBalance ?? null : null,
-        lastLimit: existing ? existing.lastLimit ?? null : null,
-        lastUsed: existing ? existing.lastUsed ?? null : null,
-        lastResetAt: existing ? existing.lastResetAt ?? null : null,
-        lastUnit: existing ? existing.lastUnit ?? normalized.defaultUnit : normalized.defaultUnit,
+        ...snapshotFields,
         lastIsValid: existing ? existing.lastIsValid ?? null : null,
         lastCheckedAt: existing ? existing.lastCheckedAt ?? null : null,
         lastError: existing ? existing.lastError ?? "" : "",
         createdAt: existing ? existing.createdAt : now,
         updatedAt: now
       };
+    }
+
+    async function saveProvider(input) {
+      const api = requireUtools();
+      const id = input && input.id ? String(input.id) : createProviderId();
+      const existing = input && input.id ? await getProviderDoc(id) : null;
+      const mode = normalizeProviderMode(input && input.mode);
+
+      if (existing && normalizeProviderMode(existing.mode) !== mode) {
+        throw new Error("站点模式不能在编辑时切换");
+      }
+
+      const normalized =
+        mode === PROVIDER_MODE_OFFICIAL
+          ? normalizeOfficialProviderInput(input, { isUpdate: Boolean(existing) })
+          : { mode: PROVIDER_MODE_RELAY, ...normalizeProviderInput(input, { isUpdate: Boolean(existing) }) };
+      const now = new Date().toISOString();
+      let doc;
+
+      if (mode === PROVIDER_MODE_OFFICIAL) {
+        if (existing && existing.officialPresetId !== normalized.officialPresetId) {
+          throw new Error("预设平台不能在编辑时切换");
+        }
+        doc = {
+          ...createPersistedBase(id, existing, normalized, now),
+          officialPresetId: normalized.officialPresetId,
+          currencyOverride: normalized.currencyOverride
+        };
+      } else {
+        doc = {
+          ...createPersistedBase(id, existing, normalized, now),
+          baseUrl: normalized.baseUrl,
+          templateId: normalized.templateId,
+          requestPath: normalized.requestPath,
+          requestMethod: normalized.requestMethod,
+          authPlacement: normalized.authPlacement,
+          requestHeaders: normalized.requestHeaders,
+          requestBody: normalized.requestBody,
+          jsonPaths: normalized.jsonPaths,
+          defaultUnit: normalized.defaultUnit,
+          priceMultiplier: normalized.priceMultiplier
+        };
+      }
 
       const result = await api.db.promises.put(doc);
       assertDbResult(result, "保存站点");
@@ -297,6 +393,27 @@
 
       const config = buildProviderRequestConfig(normalized, apiKey);
       return requestJson(config, REQUEST_TIMEOUT_MS);
+    }
+
+    async function testOfficialProvider(input) {
+      const api = requireUtools();
+      const id = input && input.id ? String(input.id) : "";
+      const existing = id ? await getProviderDoc(id) : null;
+      if (existing && normalizeProviderMode(existing.mode) !== PROVIDER_MODE_OFFICIAL) {
+        throw new Error("当前站点不是预设平台");
+      }
+      const normalized = normalizeOfficialProviderInput(input, { isUpdate: Boolean(existing) });
+      if (existing && existing.officialPresetId !== normalized.officialPresetId) {
+        throw new Error("预设平台不能在编辑时切换");
+      }
+      const apiKey = normalized.apiKey || (id ? api.dbCryptoStorage.getItem(apiKeyStorageKey(id)) : "");
+
+      return executeOfficialProvider(
+        normalized.officialPresetId,
+        apiKey,
+        (config) => requestJson(config, REQUEST_TIMEOUT_MS, { sanitizeErrors: true }),
+        normalized
+      );
     }
 
     async function deleteProvider(id) {
@@ -340,22 +457,49 @@
 
       try {
         const provider = toRendererProvider(doc);
-        const config = buildProviderRequestConfig(provider, apiKey);
-        const response = await requestJson(config, REQUEST_TIMEOUT_MS);
-        const extracted = parseProviderBalanceResponse(
-          response,
-          provider.jsonPaths,
-          provider.manualLimit,
-          provider.defaultUnit,
-          provider.priceMultiplier
-        );
+        let snapshot;
+
+        if (provider.mode === PROVIDER_MODE_OFFICIAL) {
+          snapshot = await executeOfficialProvider(
+            provider.officialPresetId,
+            apiKey,
+            (config) => requestJson(config, REQUEST_TIMEOUT_MS, { sanitizeErrors: true }),
+            provider
+          );
+        } else {
+          const config = buildProviderRequestConfig(provider, apiKey);
+          const response = await requestJson(config, REQUEST_TIMEOUT_MS);
+          const extracted = parseProviderBalanceResponse(
+            response,
+            provider.jsonPaths,
+            provider.manualLimit,
+            provider.defaultUnit,
+            provider.priceMultiplier
+          );
+          snapshot = normalizeQuotaSnapshot(
+            {
+              primaryMeterId: "balance",
+              meters: [
+                {
+                  id: "balance",
+                  label: "可用额度",
+                  kind: "balance",
+                  remaining: extracted.remaining,
+                  used: extracted.used,
+                  limit: extracted.limit,
+                  unit: extracted.unit,
+                  resetAt: extracted.resetAt,
+                  aggregate: true
+                }
+              ]
+            },
+            { defaultUnit: provider.defaultUnit }
+          );
+        }
+
         const updatedDoc = await putProviderPatch(id, {
-          lastBalance: extracted.remaining,
-          lastLimit: extracted.limit,
-          lastUsed: extracted.used,
-          lastResetAt: extracted.resetAt,
-          lastUnit: extracted.unit,
-          lastIsValid: extracted.isValid,
+          ...quotaSnapshotToLegacyFields(snapshot),
+          lastIsValid: true,
           lastCheckedAt: checkedAt,
           lastError: "",
           updatedAt: checkedAt
@@ -541,9 +685,11 @@
     root.__quotaPreloadError = null;
     root.quotaBridge = {
       getSyncState,
+      listOfficialProviderPresets: listPresetSummaries,
       listProviders,
       saveProvider,
       testProviderRequest,
+      testOfficialProvider,
       deleteProvider,
       refreshProvider,
       refreshDueProviders,

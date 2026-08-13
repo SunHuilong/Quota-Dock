@@ -26,19 +26,29 @@ import { getQuotaBridge } from "../shared/bridge";
 import {
   formatBalance,
   formatDateTime,
+  formatMeterValue,
   formatQuotaValue,
   formatTime,
+  meterProgress,
+  meterRemainingPercent,
+  primaryMeter,
   providerStatus,
   quotaProgress,
   quotaRemainingPercent,
-  sumBalance
+  sumBalancesByUnit
 } from "../shared/format";
 import type {
   AuthPlacement,
   JsonPathKey,
   JsonPathMap,
+  OfficialProviderInput,
+  OfficialProviderPresetSummary,
   ProviderInput,
+  ProviderMode,
+  QuotaMeter,
   QuotaProvider,
+  QuotaSnapshot,
+  RelayProviderInput,
   RequestMethod,
   SyncState,
   TemplateId
@@ -129,6 +139,7 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
 
 const bridge = getQuotaBridge();
 const providers = ref<QuotaProvider[]>([]);
+const officialPresets = ref<OfficialProviderPresetSummary[]>([]);
 const syncState = ref<SyncState | null>(null);
 const loading = ref(true);
 const saving = ref(false);
@@ -141,17 +152,21 @@ const providerFormErrorMessage = ref("");
 const refreshingIds = ref<string[]>([]);
 const isProviderModalOpen = ref(false);
 const isTemplateConfigOpen = ref(false);
+const isOptionalSettingsOpen = ref(false);
 const isJsonPreviewOpen = ref(false);
 const pendingDeleteProvider = ref<QuotaProvider | null>(null);
 const testingRequest = ref(false);
 const testResponse = ref<unknown | null>(null);
+const testSnapshot = ref<QuotaSnapshot | null>(null);
 const testMessage = ref("");
 const selectedJsonLeaf = ref<JsonLeaf | null>(null);
 let refreshTimer = 0;
 
 const form = reactive({
   id: "",
+  mode: "relay" as ProviderMode,
   name: "",
+  officialPresetId: "",
   baseUrl: "",
   apiKey: "",
   templateId: "openai-usage" as TemplateId,
@@ -162,22 +177,37 @@ const form = reactive({
   requestBody: "",
   jsonPaths: createEmptyJsonPaths(),
   manualLimit: "" as number | "",
+  currencyOverride: "",
   defaultUnit: DEFAULT_UNIT,
   priceMultiplier: 1,
   refreshIntervalMinutes: 30
 });
 
 const isEditing = computed(() => Boolean(form.id));
+const selectedOfficialPreset = computed(
+  () => officialPresets.value.find((preset) => preset.id === form.officialPresetId) || null
+);
+const officialPresetGroups = computed(() => {
+  const groups = new Map<string, OfficialProviderPresetSummary[]>();
+  for (const preset of officialPresets.value) {
+    const items = groups.get(preset.categoryLabel) || [];
+    items.push(preset);
+    groups.set(preset.categoryLabel, items);
+  }
+  return [...groups.entries()].map(([label, items]) => ({ label, items }));
+});
 const providerCount = computed(() => providers.value.length);
 const activeCount = computed(
-  () => providers.value.filter((provider) => provider.lastCheckedAt && !provider.lastError && provider.lastIsValid !== false).length
+  () =>
+    providers.value.filter(
+      (provider) =>
+        provider.lastCheckedAt &&
+        !provider.lastError &&
+        provider.lastIsValid !== false &&
+        (provider.mode !== "official" || provider.officialPresetAvailable)
+    ).length
 );
-const totalBalance = computed(() =>
-  new Intl.NumberFormat("en-US", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
-  }).format(sumBalance(providers.value))
-);
+const balanceTotals = computed(() => sumBalancesByUnit(providers.value));
 const lastCheckedAt = computed(() => {
   const timestamps = providers.value
     .map((provider) => (provider.lastCheckedAt ? Date.parse(provider.lastCheckedAt) : NaN))
@@ -255,6 +285,7 @@ function setProviderFormError(error: unknown, fallback: string) {
 
 function resetTestResult() {
   testResponse.value = null;
+  testSnapshot.value = null;
   testMessage.value = "";
   selectedJsonLeaf.value = null;
 }
@@ -273,14 +304,18 @@ function isJsonPathRequired(key: JsonPathKey) {
   return key === "used" && !form.jsonPaths.balance;
 }
 
-function resetForm() {
+function resetForm(mode: ProviderMode = "relay") {
   isJsonPreviewOpen.value = false;
+  isOptionalSettingsOpen.value = false;
   form.id = "";
+  form.mode = mode;
   form.name = "";
+  form.officialPresetId = mode === "official" ? officialPresets.value[0]?.id || "" : "";
   form.baseUrl = "";
   form.apiKey = "";
   applyTemplatePreset("openai-usage");
   form.manualLimit = "";
+  form.currencyOverride = "";
   form.refreshIntervalMinutes = 30;
   showApiKey.value = false;
   providerFormErrorMessage.value = "";
@@ -288,9 +323,17 @@ function resetForm() {
 }
 
 function openCreateModal() {
-  resetForm();
+  resetForm("official");
   errorMessage.value = "";
   isProviderModalOpen.value = true;
+}
+
+function switchCreateMode(mode: ProviderMode) {
+  if (isEditing.value || form.mode === mode) {
+    return;
+  }
+
+  resetForm(mode);
 }
 
 function closeProviderModal() {
@@ -305,7 +348,9 @@ function closeProviderModal() {
 function editProvider(provider: QuotaProvider) {
   isJsonPreviewOpen.value = false;
   form.id = provider.id;
+  form.mode = provider.mode;
   form.name = provider.name;
+  form.officialPresetId = provider.officialPresetId || "";
   form.baseUrl = provider.baseUrl;
   form.apiKey = "";
   form.templateId = provider.templateId || "openai-usage";
@@ -316,6 +361,7 @@ function editProvider(provider: QuotaProvider) {
   form.requestBody = provider.requestBody || defaultBodyForAuth(form.authPlacement);
   Object.assign(form.jsonPaths, createEmptyJsonPaths(), provider.jsonPaths || {});
   form.manualLimit = provider.manualLimit ?? "";
+  form.currencyOverride = provider.currencyOverride || "";
   form.defaultUnit = provider.defaultUnit || DEFAULT_UNIT;
   form.priceMultiplier = provider.priceMultiplier ?? 1;
   isTemplateConfigOpen.value = form.templateId === "custom";
@@ -325,6 +371,21 @@ function editProvider(provider: QuotaProvider) {
   providerFormErrorMessage.value = "";
   resetTestResult();
   isProviderModalOpen.value = true;
+}
+
+function applyOfficialPreset() {
+  form.manualLimit = "";
+  form.currencyOverride = "";
+  resetTestResult();
+}
+
+function selectOfficialPreset(presetId: string) {
+  if (form.officialPresetId === presetId) {
+    return;
+  }
+
+  form.officialPresetId = presetId;
+  applyOfficialPreset();
 }
 
 function requestDeleteProvider(provider: QuotaProvider) {
@@ -374,8 +435,23 @@ function setAuthPlacement(authPlacement: AuthPlacement) {
 }
 
 function buildProviderInput(): ProviderInput {
-  return {
+  if (form.mode === "official") {
+    const input: OfficialProviderInput = {
+      id: form.id || undefined,
+      mode: "official",
+      name: form.name,
+      officialPresetId: form.officialPresetId,
+      apiKey: form.apiKey,
+      manualLimit: form.manualLimit === "" ? null : form.manualLimit,
+      currencyOverride: form.currencyOverride,
+      refreshIntervalMinutes: form.refreshIntervalMinutes
+    };
+    return input;
+  }
+
+  const input: RelayProviderInput = {
     id: form.id || undefined,
+    mode: "relay",
     name: form.name,
     baseUrl: form.baseUrl,
     apiKey: form.apiKey,
@@ -391,6 +467,26 @@ function buildProviderInput(): ProviderInput {
     priceMultiplier: form.priceMultiplier,
     refreshIntervalMinutes: form.refreshIntervalMinutes
   };
+  return input;
+}
+
+function getPrimaryMeter(provider: QuotaProvider) {
+  return primaryMeter(provider);
+}
+
+function additionalMeters(provider: QuotaProvider) {
+  const primaryId = getPrimaryMeter(provider)?.id;
+  return provider.lastMeters.filter((meter) => meter.id !== primaryId);
+}
+
+function meterUsageText(meter: QuotaMeter) {
+  if (meter.limit !== null && meter.used !== null) {
+    return `已用 ${formatQuotaValue(meter.used)} / ${formatQuotaValue(meter.limit)}`;
+  }
+  if (meter.used !== null && meter.remaining === null) {
+    return `已用 ${formatQuotaValue(meter.used)}`;
+  }
+  return "";
 }
 
 function formatJsonPreview(value: unknown) {
@@ -484,6 +580,10 @@ async function loadProviders() {
   providers.value = await bridge.listProviders();
 }
 
+async function loadOfficialPresets() {
+  officialPresets.value = await bridge.listOfficialProviderPresets();
+}
+
 async function refreshDueSilently() {
   if (refreshingDue.value || refreshingAll.value || refreshingIds.value.length > 0 || deleting.value) {
     return;
@@ -509,8 +609,7 @@ async function bootstrap() {
   errorMessage.value = "";
 
   try {
-    await loadSyncState();
-    await loadProviders();
+    await Promise.all([loadSyncState(), loadOfficialPresets(), loadProviders()]);
     await refreshDueSilently();
   } catch (error) {
     setError(error, "加载失败");
@@ -543,10 +642,19 @@ async function sendTestRequest() {
   selectedJsonLeaf.value = null;
 
   try {
-    testResponse.value = await bridge.testProviderRequest(buildProviderInput());
-    testMessage.value = "已获取 JSON 响应";
+    const input = buildProviderInput();
+    if (input.mode === "official") {
+      testResponse.value = null;
+      testSnapshot.value = await bridge.testOfficialProvider(input);
+      testMessage.value = "额度查询成功";
+    } else {
+      testSnapshot.value = null;
+      testResponse.value = await bridge.testProviderRequest(input);
+      testMessage.value = "已获取 JSON 响应";
+    }
   } catch (error) {
     testResponse.value = null;
+    testSnapshot.value = null;
     setProviderFormError(error, "发送失败");
   } finally {
     testingRequest.value = false;
@@ -655,7 +763,7 @@ onBeforeUnmount(() => {
         </button>
         <button class="button button-primary" type="button" @click="openCreateModal">
           <Plus :size="16" />
-          新增
+          添加站点
         </button>
       </div>
     </section>
@@ -663,7 +771,12 @@ onBeforeUnmount(() => {
     <section class="summary-strip" aria-label="额度概览">
       <article class="summary-chip">
         <span>总余额</span>
-        <strong>{{ totalBalance }} USD</strong>
+        <strong v-if="balanceTotals.length" class="summary-balance-values">
+          <span v-for="item in balanceTotals" :key="item.unit">
+            {{ formatQuotaValue(item.total) }} {{ item.unit }}
+          </span>
+        </strong>
+        <strong v-else>--</strong>
       </article>
       <article class="summary-chip">
         <span>可用</span>
@@ -700,7 +813,7 @@ onBeforeUnmount(() => {
         <span>还没有站点</span>
         <button class="button button-primary" type="button" @click="openCreateModal">
           <Plus :size="16" />
-          新增站点
+          添加站点
         </button>
       </div>
 
@@ -710,7 +823,9 @@ onBeforeUnmount(() => {
             <div class="provider-info">
               <div class="provider-title-row">
                 <h3>{{ provider.name }}</h3>
-                <span class="template-pill">{{ getTemplateName(provider.templateId) }}</span>
+                <span class="template-pill">
+                  {{ provider.mode === "official" ? provider.officialPresetName || "预设不可用" : getTemplateName(provider.templateId) }}
+                </span>
                 <span class="status-pill provider-title-status" :class="`tone-${providerStatus(provider).tone}`">
                   <CheckCircle2 v-if="providerStatus(provider).tone === 'ok'" :size="13" />
                   <AlertTriangle v-else-if="providerStatus(provider).tone === 'error'" :size="13" />
@@ -736,13 +851,36 @@ onBeforeUnmount(() => {
                   <span class="quota-reset-text">下次重置 {{ formatDateTime(provider.lastResetAt) }}</span>
                 </div>
               </div>
+
+              <div v-if="additionalMeters(provider).length" class="additional-meter-list">
+                <div v-for="meter in additionalMeters(provider)" :key="meter.id" class="additional-meter">
+                  <div class="additional-meter-head">
+                    <span>{{ meter.label }}</span>
+                    <strong>{{ formatMeterValue(meter) }} <small>{{ meter.unit }}</small></strong>
+                  </div>
+                  <div v-if="meterProgress(meter) !== null" class="quota-progress compact-meter-progress">
+                    <div class="quota-progress-text">
+                      <span>{{ meterUsageText(meter) }}</span>
+                      <strong>{{ meterRemainingPercent(meter)?.toFixed(1) }}%</strong>
+                    </div>
+                    <div class="quota-progress-track">
+                      <span :style="{ width: `${meterProgress(meter)}%` }"></span>
+                    </div>
+                  </div>
+                  <span v-else-if="meterUsageText(meter)" class="meter-usage-only">{{ meterUsageText(meter) }}</span>
+                  <span v-if="meter.resetAt" class="quota-reset-text">下次重置 {{ formatDateTime(meter.resetAt) }}</span>
+                </div>
+              </div>
             </div>
 
             <div class="provider-side">
               <div class="provider-balance">
+                <span class="provider-balance-label">{{ getPrimaryMeter(provider)?.label || "可用额度" }}</span>
                 <strong>{{ formatBalance(provider) }}</strong>
                 <div class="provider-balance-meta">
-                  <span class="provider-unit">{{ provider.lastUnit || "USD" }}</span>
+                  <span class="provider-unit">
+                    {{ getPrimaryMeter(provider)?.unit || provider.lastUnit || provider.defaultUnit || "USD" }}
+                  </span>
                   <span class="provider-updated-time">{{ formatTime(provider.lastCheckedAt) }}</span>
                   <button
                     class="provider-refresh-button"
@@ -776,15 +914,73 @@ onBeforeUnmount(() => {
         <form class="modal-card provider-modal" @submit.prevent="saveProvider">
           <div class="modal-heading">
             <div>
-              <p class="eyebrow">Provider Config</p>
-              <h2>{{ isEditing ? "编辑站点" : "新增站点" }}</h2>
+              <p class="eyebrow">{{ form.mode === "official" ? "Preset Provider" : "Relay Provider" }}</p>
+              <h2>{{ isEditing ? "编辑站点" : "添加站点" }}</h2>
             </div>
             <button class="icon-button" type="button" title="关闭" aria-label="关闭" @click="closeProviderModal">
               <X :size="18" />
             </button>
           </div>
 
-          <div class="form-row name-interval-row">
+          <div class="segmented-control create-mode-tabs" role="tablist" aria-label="站点类型">
+            <button
+              class="segment-button"
+              :class="{ active: form.mode === 'official' }"
+              type="button"
+              role="tab"
+              :aria-selected="form.mode === 'official'"
+              :disabled="isEditing"
+              @click="switchCreateMode('official')"
+            >
+              官方
+            </button>
+            <button
+              class="segment-button"
+              :class="{ active: form.mode === 'relay' }"
+              type="button"
+              role="tab"
+              :aria-selected="form.mode === 'relay'"
+              :disabled="isEditing"
+              @click="switchCreateMode('relay')"
+            >
+              专业模式
+            </button>
+          </div>
+
+          <section v-if="form.mode === 'official'" class="official-preset-picker" aria-labelledby="official-preset-label">
+            <div class="official-preset-head">
+              <span id="official-preset-label">提供商</span>
+            </div>
+            <div class="official-preset-groups" role="radiogroup" aria-labelledby="official-preset-label">
+              <div v-if="form.officialPresetId && !selectedOfficialPreset" class="preset-option-list">
+                <button class="preset-option active" type="button" role="radio" aria-checked="true" disabled>
+                  <span>预设不可用</span>
+                  <AlertTriangle :size="15" />
+                </button>
+              </div>
+              <section v-for="group in officialPresetGroups" :key="group.label" class="preset-group">
+                <h3>{{ group.label }}</h3>
+                <div class="preset-option-list">
+                  <button
+                    v-for="preset in group.items"
+                    :key="preset.id"
+                    class="preset-option"
+                    :class="{ active: form.officialPresetId === preset.id }"
+                    type="button"
+                    role="radio"
+                    :aria-checked="form.officialPresetId === preset.id"
+                    :disabled="isEditing"
+                    @click="selectOfficialPreset(preset.id)"
+                  >
+                    <span>{{ preset.name }}</span>
+                    <CheckCircle2 v-if="form.officialPresetId === preset.id" :size="15" />
+                  </button>
+                </div>
+              </section>
+            </div>
+          </section>
+
+          <div v-if="form.mode === 'relay'" class="form-row name-interval-row">
             <label class="field name-field compact-field">
               <span>名称</span>
               <input v-model.trim="form.name" autocomplete="off" placeholder="例如：主用站点" required />
@@ -799,7 +995,7 @@ onBeforeUnmount(() => {
             </label>
           </div>
 
-          <div class="field">
+          <div v-if="form.mode === 'relay'" class="field">
             <span>模板</span>
             <select v-model="form.templateId" @change="applyTemplatePreset(form.templateId)">
               <option v-for="template in TEMPLATE_PRESETS" :key="template.id" :value="template.id">
@@ -808,19 +1004,19 @@ onBeforeUnmount(() => {
             </select>
           </div>
 
-          <label class="field">
+          <label v-if="form.mode === 'relay'" class="field">
             <span>Base URL</span>
             <input v-model.trim="form.baseUrl" autocomplete="off" placeholder="https://api.example.com" required />
           </label>
 
           <label class="field">
-            <span>API Key</span>
+            <span>{{ form.mode === "official" ? selectedOfficialPreset?.credentialLabel || "API Key" : "API Key" }}</span>
             <div class="secret-input">
               <input
                 v-model.trim="form.apiKey"
                 :type="showApiKey ? 'text' : 'password'"
                 autocomplete="off"
-                :placeholder="isEditing ? '留空则保持原 Key' : 'sk-...'"
+                :placeholder="isEditing ? '留空则保持原 Key' : form.mode === 'official' ? selectedOfficialPreset?.credentialPlaceholder || 'sk-...' : 'sk-...'"
                 :required="!isEditing"
               />
               <button class="icon-button" type="button" title="显示或隐藏 API Key" aria-label="显示或隐藏 API Key" @click="showApiKey = !showApiKey">
@@ -828,9 +1024,92 @@ onBeforeUnmount(() => {
                 <Eye v-else :size="18" />
               </button>
             </div>
+            <small v-if="form.mode === 'official' && selectedOfficialPreset?.credentialHelp" class="field-help">
+              {{ selectedOfficialPreset.credentialHelp }}
+            </small>
           </label>
 
-          <section class="template-config" :class="{ collapsed: !isTemplateConfigOpen }">
+          <section
+            v-if="form.mode === 'official'"
+            class="template-config official-options"
+            :class="{ collapsed: !isOptionalSettingsOpen }"
+          >
+            <button
+              class="template-config-toggle"
+              type="button"
+              :aria-expanded="isOptionalSettingsOpen"
+              title="展开或收起可选设置"
+              @click="isOptionalSettingsOpen = !isOptionalSettingsOpen"
+            >
+              <span>可选设置</span>
+              <ChevronDown v-if="isOptionalSettingsOpen" :size="17" />
+              <ChevronRight v-else :size="17" />
+            </button>
+
+            <div v-if="isOptionalSettingsOpen" class="template-config-body">
+              <label class="field">
+                <span>别名</span>
+                <input v-model.trim="form.name" autocomplete="off" :placeholder="selectedOfficialPreset?.name || '使用提供商名称'" />
+              </label>
+
+              <div class="form-row two-columns official-option-grid">
+                <label v-if="selectedOfficialPreset?.supportsManualLimit !== false" class="field compact-field">
+                  <span>总额度</span>
+                  <input
+                    v-model.number="form.manualLimit"
+                    type="number"
+                    min="0"
+                    step="any"
+                    autocomplete="off"
+                    placeholder="选填"
+                  />
+                </label>
+
+                <label v-if="selectedOfficialPreset?.supportsCurrencyOverride !== false" class="field compact-field">
+                  <span>货币</span>
+                  <input
+                    v-model.trim="form.currencyOverride"
+                    autocomplete="off"
+                    :placeholder="selectedOfficialPreset?.defaultUnit || 'USD'"
+                  />
+                </label>
+
+                <label class="field compact-field">
+                  <span>更新间隔</span>
+                  <div class="interval-row">
+                    <input v-model.number="form.refreshIntervalMinutes" type="number" min="1" max="1440" required />
+                    <span>分钟</span>
+                  </div>
+                </label>
+              </div>
+            </div>
+          </section>
+
+          <section v-if="form.mode === 'official' && testSnapshot" class="official-test-result">
+            <div class="json-result-head">
+              <strong>查询结果</strong>
+              <span>{{ testSnapshot.meters.length }} 项额度</span>
+            </div>
+            <div class="official-test-meter-list">
+              <div v-for="meter in testSnapshot.meters" :key="meter.id" class="official-test-meter">
+                <div class="additional-meter-head">
+                  <span>{{ meter.label }}</span>
+                  <strong>{{ formatMeterValue(meter) }} <small>{{ meter.unit }}</small></strong>
+                </div>
+                <div v-if="meterProgress(meter) !== null" class="quota-progress compact-meter-progress">
+                  <div class="quota-progress-text">
+                    <span>{{ meterUsageText(meter) }}</span>
+                    <strong>{{ meterRemainingPercent(meter)?.toFixed(1) }}%</strong>
+                  </div>
+                  <div class="quota-progress-track">
+                    <span :style="{ width: `${meterProgress(meter)}%` }"></span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section v-if="form.mode === 'relay'" class="template-config" :class="{ collapsed: !isTemplateConfigOpen }">
             <button
               class="template-config-toggle"
               type="button"

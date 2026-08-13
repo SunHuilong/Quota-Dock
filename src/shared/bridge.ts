@@ -1,4 +1,13 @@
-import type { ProviderInput, QuotaBridge, QuotaProvider, SyncState } from "./types";
+import type {
+  OfficialProviderInput,
+  OfficialProviderPresetSummary,
+  ProviderInput,
+  QuotaBridge,
+  QuotaProvider,
+  QuotaSnapshot,
+  RelayProviderInput,
+  SyncState
+} from "./types";
 
 const UNAVAILABLE_MESSAGE = "未检测到 uTools preload，请在 uTools 开发者工具中加载 dist 目录";
 
@@ -22,13 +31,19 @@ function createUnavailableBridge(): QuotaBridge {
         label: window.__quotaPreloadError ? "preload 加载失败" : "preload 未连接"
       };
     },
+    listOfficialProviderPresets(): Promise<OfficialProviderPresetSummary[]> {
+      return fail();
+    },
     listProviders(): Promise<QuotaProvider[]> {
       return fail();
     },
     saveProvider(_input: ProviderInput): Promise<QuotaProvider> {
       return fail();
     },
-    testProviderRequest(_input: ProviderInput): Promise<unknown> {
+    testProviderRequest(_input: RelayProviderInput): Promise<unknown> {
+      return fail();
+    },
+    testOfficialProvider(_input: OfficialProviderInput): Promise<QuotaSnapshot> {
       return fail();
     },
     deleteProvider(_id: string): Promise<boolean> {

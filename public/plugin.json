@@ -1,6 +1,6 @@
 {
   "pluginName": "Quota Dock - AI额度看板",
-  "description": "一款用于查询 AI 站点额度的 uTools 插件。支持配置多个站点的 Base URL、API Key 和额度查询模板，也可自定义请求与 JSON 字段映射。插件提供主窗口列表和浮窗模式，适合长期关注 API 额度消耗的用户。",
+  "description": "Quota Dock 是一款 AI API 余额与额度查询 uTools 插件，支持官方预设平台与中转站专业模式。内置 DeepSeek、Kimi、阶跃星辰 StepFun、硅基流动 SiliconFlow、302.AI、Novita AI、OpenRouter、MiniMax Token Plan、智谱 GLM Coding Plan、Z.AI Coding Plan、xAI / Grok、OpenAI Organization、Anthropic Organization 和 AIHubMix 等平台。可集中查看多站点余额、总额度、已用额度、套餐用量、重置时间和多货币汇总；中转站支持自定义 Base URL、API Key、请求参数及 JSON 字段映射，并提供自动刷新与浮窗监控。",
   "author": "Codex",
   "homepage": "",
   "version": "0.1.0",
@@ -14,7 +14,13 @@
     {
       "code": "quota-inquiry",
       "explain": "Quota Dock - AI额度看板",
-      "cmds": ["Quota Dock", "AI额度看板", "AI额度", "站点额度", "额度查询"]
+      "cmds": [
+        "Quota Dock",
+        "AI额度看板",
+        "余额查询",
+        "额度查询",
+        "中转站余额"
+      ]
     }
   ]
 }

@@ -1,14 +1,43 @@
-import type { QuotaProvider } from "./types";
+import type { QuotaMeter, QuotaProvider } from "./types";
 
-export function formatBalance(provider: QuotaProvider): string {
-  if (provider.lastBalance === null || provider.lastBalance === undefined) {
-    return "--";
+export function primaryMeter(provider: QuotaProvider): QuotaMeter | null {
+  if (provider.lastMeters.length) {
+    return (
+      provider.lastMeters.find((meter) => meter.id === provider.lastPrimaryMeterId) ||
+      provider.lastMeters[0]
+    );
   }
 
-  return new Intl.NumberFormat("en-US", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
-  }).format(provider.lastBalance);
+  if (provider.lastBalance === null && provider.lastUsed === null && provider.lastLimit === null) {
+    return null;
+  }
+
+  return {
+    id: "balance",
+    label: "可用额度",
+    kind: "balance",
+    remaining: provider.lastBalance,
+    used: provider.lastUsed,
+    limit: provider.lastLimit,
+    unit: provider.lastUnit || provider.defaultUnit || "USD",
+    resetAt: provider.lastResetAt,
+    aggregate: true
+  };
+}
+
+export function meterDisplayValue(meter: QuotaMeter | null): number | null {
+  if (!meter) {
+    return null;
+  }
+  return meter.remaining ?? meter.used;
+}
+
+export function formatMeterValue(meter: QuotaMeter | null): string {
+  return formatQuotaValue(meterDisplayValue(meter));
+}
+
+export function formatBalance(provider: QuotaProvider): string {
+  return formatMeterValue(primaryMeter(provider));
 }
 
 export function formatDateTime(value: string | null): string {
@@ -56,23 +85,30 @@ export function formatQuotaValue(value: number | null | undefined): string {
   }).format(value);
 }
 
-export function quotaProgress(provider: QuotaProvider): number | null {
-  if (
-    provider.lastLimit === null ||
-    provider.lastLimit === undefined ||
-    provider.lastUsed === null ||
-    provider.lastUsed === undefined ||
-    provider.lastLimit <= 0
-  ) {
+export function meterProgress(meter: QuotaMeter | null): number | null {
+  if (!meter || meter.limit === null || meter.limit <= 0) {
     return null;
   }
 
-  return Math.max(0, Math.min(100, (provider.lastUsed / provider.lastLimit) * 100));
+  const used = meter.used ?? (meter.remaining === null ? null : Math.max(0, meter.limit - meter.remaining));
+  if (used === null) {
+    return null;
+  }
+
+  return Math.max(0, Math.min(100, (used / meter.limit) * 100));
+}
+
+export function meterRemainingPercent(meter: QuotaMeter | null): number | null {
+  const usedPercent = meterProgress(meter);
+  return usedPercent === null ? null : 100 - usedPercent;
+}
+
+export function quotaProgress(provider: QuotaProvider): number | null {
+  return meterProgress(primaryMeter(provider));
 }
 
 export function quotaRemainingPercent(provider: QuotaProvider): number | null {
-  const usedPercent = quotaProgress(provider);
-  return usedPercent === null ? null : 100 - usedPercent;
+  return meterRemainingPercent(primaryMeter(provider));
 }
 
 export function formatDomain(baseUrl: string): string {
@@ -85,6 +121,10 @@ export function formatDomain(baseUrl: string): string {
 }
 
 export function providerStatus(provider: QuotaProvider): { text: string; tone: "ok" | "warn" | "error" | "idle" } {
+  if (provider.mode === "official" && !provider.officialPresetAvailable) {
+    return { text: "预设不可用", tone: "error" };
+  }
+
   if (provider.lastError) {
     return { text: "异常", tone: "error" };
   }
@@ -100,12 +140,29 @@ export function providerStatus(provider: QuotaProvider): { text: string; tone: "
   return { text: "待查询", tone: "idle" };
 }
 
-export function sumBalance(providers: QuotaProvider[]): number {
-  return providers.reduce((sum, provider) => {
-    if (provider.lastBalance === null || provider.lastBalance === undefined || provider.lastError) {
-      return sum;
-    }
+export interface BalanceTotal {
+  unit: string;
+  total: number;
+}
 
-    return sum + provider.lastBalance;
-  }, 0);
+export function sumBalancesByUnit(providers: QuotaProvider[]): BalanceTotal[] {
+  const totals = new Map<string, number>();
+
+  for (const provider of providers) {
+    for (const meter of provider.lastMeters) {
+      if (meter.kind !== "balance" || !meter.aggregate || meter.remaining === null) {
+        continue;
+      }
+      const unit = String(meter.unit || "USD").trim().toUpperCase() || "USD";
+      totals.set(unit, (totals.get(unit) || 0) + meter.remaining);
+    }
+  }
+
+  return [...totals.entries()]
+    .map(([unit, total]) => ({ unit, total }))
+    .sort((a, b) => a.unit.localeCompare(b.unit));
+}
+
+export function sumBalance(providers: QuotaProvider[]): number {
+  return sumBalancesByUnit(providers).reduce((sum, item) => sum + item.total, 0);
 }

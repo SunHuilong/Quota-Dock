@@ -15,6 +15,9 @@ const REQUEST_METHOD_GET = "GET";
 const REQUEST_METHOD_POST = "POST";
 const AUTH_PLACEMENT_HEADER = "header";
 const AUTH_PLACEMENT_BODY = "body";
+const PROVIDER_MODE_RELAY = "relay";
+const PROVIDER_MODE_OFFICIAL = "official";
+const QUOTA_METER_KINDS = new Set(["balance", "quota", "spend"]);
 const DEFAULT_JSON_PATHS = {
   balance: "",
   used: "",
@@ -139,6 +142,166 @@ function normalizePriceMultiplier(value) {
 
 function normalizeDefaultUnit(value) {
   return String(value || DEFAULT_UNIT).trim() || DEFAULT_UNIT;
+}
+
+function normalizeProviderMode(value) {
+  return String(value || "").trim().toLowerCase() === PROVIDER_MODE_OFFICIAL
+    ? PROVIDER_MODE_OFFICIAL
+    : PROVIDER_MODE_RELAY;
+}
+
+function normalizeCurrencyOverride(value) {
+  const unit = String(value || "").trim().toUpperCase();
+
+  if (unit && !/^[A-Z][A-Z0-9._-]{0,11}$/.test(unit)) {
+    throw new Error("货币单位格式不正确");
+  }
+
+  return unit;
+}
+
+function nullableFiniteNumber(value) {
+  if (value === undefined || value === null || (typeof value === "string" && !value.trim())) {
+    return null;
+  }
+
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function normalizeQuotaMeter(meter, index, fallbackUnit) {
+  const source = meter && typeof meter === "object" && !Array.isArray(meter) ? meter : {};
+  const id = String(source.id || `meter-${index + 1}`).trim() || `meter-${index + 1}`;
+  const kind = QUOTA_METER_KINDS.has(source.kind) ? source.kind : "balance";
+
+  return {
+    id,
+    label: String(source.label || "可用额度").trim() || "可用额度",
+    kind,
+    remaining: nullableFiniteNumber(source.remaining),
+    used: nullableFiniteNumber(source.used),
+    limit: nullableFiniteNumber(source.limit),
+    unit: normalizeDefaultUnit(source.unit || fallbackUnit),
+    resetAt:
+      source.resetAt === undefined || source.resetAt === null || source.resetAt === ""
+        ? null
+        : String(source.resetAt),
+    aggregate: Boolean(source.aggregate)
+  };
+}
+
+function normalizeQuotaSnapshot(snapshot, options) {
+  const source = snapshot && typeof snapshot === "object" && !Array.isArray(snapshot) ? snapshot : {};
+  const settings = options || {};
+  const fallbackUnit = normalizeDefaultUnit(settings.defaultUnit);
+  const currencyOverride = normalizeCurrencyOverride(settings.currencyOverride);
+  const manualLimit = normalizeManualLimit(settings.manualLimit);
+  const rawMeters = Array.isArray(source.meters) ? source.meters : [];
+  const seenIds = new Set();
+  const meters = rawMeters.map((meter, index) => {
+    const normalized = normalizeQuotaMeter(meter, index, fallbackUnit);
+    let id = normalized.id;
+    let suffix = 2;
+
+    while (seenIds.has(id)) {
+      id = `${normalized.id}-${suffix}`;
+      suffix += 1;
+    }
+    seenIds.add(id);
+    normalized.id = id;
+    return normalized;
+  });
+
+  if (!meters.length) {
+    throw new Error("额度响应中没有可展示的数据");
+  }
+
+  const requestedPrimaryId = String(source.primaryMeterId || "").trim();
+  const primary = meters.find((meter) => meter.id === requestedPrimaryId) || meters[0];
+
+  for (const meter of meters) {
+    if (currencyOverride && (meter.id === primary.id || meter.kind === "balance" || meter.kind === "spend")) {
+      meter.unit = currencyOverride;
+    }
+  }
+
+  if (manualLimit !== null && primary.limit === null) {
+    primary.limit = manualLimit;
+  }
+
+  if (primary.limit !== null) {
+    if (primary.remaining === null && primary.used !== null) {
+      primary.remaining = primary.limit - primary.used;
+    } else if (primary.used === null && primary.remaining !== null) {
+      primary.used = Math.max(0, primary.limit - primary.remaining);
+    }
+  }
+
+  if (primary.remaining === null && primary.used === null) {
+    throw new Error("主要额度缺少可用或已用数值");
+  }
+
+  return {
+    primaryMeterId: primary.id,
+    meters
+  };
+}
+
+function quotaSnapshotFromLegacy(provider) {
+  const source = provider || {};
+
+  if (Array.isArray(source.lastMeters) && source.lastMeters.length) {
+    try {
+      return normalizeQuotaSnapshot(
+        {
+          primaryMeterId: source.lastPrimaryMeterId,
+          meters: source.lastMeters
+        },
+        { defaultUnit: source.lastUnit || source.defaultUnit || DEFAULT_UNIT }
+      );
+    } catch {
+      // Fall through to the mirrored legacy fields when synced data is incomplete.
+    }
+  }
+
+  return {
+    primaryMeterId: "balance",
+    meters: [
+      {
+        id: "balance",
+        label: "可用额度",
+        kind: "balance",
+        remaining: nullableFiniteNumber(source.lastBalance),
+        used: nullableFiniteNumber(source.lastUsed),
+        limit: nullableFiniteNumber(source.lastLimit),
+        unit: normalizeDefaultUnit(source.lastUnit || source.defaultUnit || DEFAULT_UNIT),
+        resetAt: source.lastResetAt ? String(source.lastResetAt) : null,
+        aggregate: true
+      }
+    ]
+  };
+}
+
+function getPrimaryQuotaMeter(snapshot) {
+  if (!snapshot || !Array.isArray(snapshot.meters) || !snapshot.meters.length) {
+    return null;
+  }
+
+  return snapshot.meters.find((meter) => meter.id === snapshot.primaryMeterId) || snapshot.meters[0];
+}
+
+function quotaSnapshotToLegacyFields(snapshot) {
+  const primary = getPrimaryQuotaMeter(snapshot);
+
+  return {
+    lastPrimaryMeterId: primary ? primary.id : null,
+    lastMeters: snapshot && Array.isArray(snapshot.meters) ? snapshot.meters : [],
+    lastBalance: primary ? primary.remaining : null,
+    lastLimit: primary ? primary.limit : null,
+    lastUsed: primary ? primary.used : null,
+    lastResetAt: primary ? primary.resetAt : null,
+    lastUnit: primary ? primary.unit : null
+  };
 }
 
 function defaultAdvancedHeaders(authPlacement) {
@@ -686,6 +849,8 @@ module.exports = {
   REQUEST_METHOD_POST,
   AUTH_PLACEMENT_HEADER,
   AUTH_PLACEMENT_BODY,
+  PROVIDER_MODE_RELAY,
+  PROVIDER_MODE_OFFICIAL,
   DEFAULT_JSON_PATHS,
   getProviderTemplates,
   getProviderTemplate,
@@ -701,6 +866,15 @@ module.exports = {
   getDefaultAdvancedBodyText,
   normalizeJsonPaths,
   normalizeProviderInput,
+  normalizeProviderMode,
+  normalizeCurrencyOverride,
+  normalizeManualLimit,
+  normalizeDefaultUnit,
+  normalizeQuotaMeter,
+  normalizeQuotaSnapshot,
+  quotaSnapshotFromLegacy,
+  getPrimaryQuotaMeter,
+  quotaSnapshotToLegacyFields,
   parseJsonPath,
   getJsonPathValue,
   parseProviderBalanceResponse,

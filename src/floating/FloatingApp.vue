@@ -5,8 +5,12 @@ import { getQuotaBridge } from "../shared/bridge";
 import {
   formatBalance,
   formatDateTime,
+  formatMeterValue,
   formatQuotaValue,
   formatTime,
+  meterProgress,
+  meterRemainingPercent,
+  primaryMeter,
   providerStatus,
   quotaProgress,
   quotaRemainingPercent
@@ -67,6 +71,11 @@ async function refreshAll() {
 
 function closeWindow() {
   window.close();
+}
+
+function additionalMeters(provider: QuotaProvider) {
+  const primaryId = primaryMeter(provider)?.id;
+  return provider.lastMeters.filter((meter) => meter.id !== primaryId);
 }
 
 onMounted(async () => {
@@ -132,7 +141,7 @@ onBeforeUnmount(() => {
         </div>
         <div class="floating-balance">
           <strong>{{ formatBalance(provider) }}</strong>
-          <span>{{ provider.lastUnit || "USD" }}</span>
+          <span>{{ primaryMeter(provider)?.unit || provider.lastUnit || provider.defaultUnit || "USD" }}</span>
         </div>
         <div v-if="quotaProgress(provider) !== null" class="quota-progress floating-quota-progress" aria-label="额度使用进度">
           <div class="quota-progress-text">
@@ -144,6 +153,16 @@ onBeforeUnmount(() => {
           </div>
           <div v-if="provider.lastResetAt" class="quota-reset-row">
             <span class="quota-reset-text">下次重置 {{ formatDateTime(provider.lastResetAt) }}</span>
+          </div>
+        </div>
+        <div v-if="additionalMeters(provider).length" class="floating-meter-list">
+          <div v-for="meter in additionalMeters(provider)" :key="meter.id" class="floating-meter">
+            <span>{{ meter.label }}</span>
+            <strong>{{ formatMeterValue(meter) }} {{ meter.unit }}</strong>
+            <div v-if="meterProgress(meter) !== null" class="quota-progress-track">
+              <span :style="{ width: `${meterProgress(meter)}%` }"></span>
+            </div>
+            <small v-if="meterProgress(meter) !== null">剩余 {{ meterRemainingPercent(meter)?.toFixed(1) }}%</small>
           </div>
         </div>
         <small>更新：{{ formatTime(provider.lastCheckedAt) }}</small>
