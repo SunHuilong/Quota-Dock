@@ -790,6 +790,67 @@ assert.deepEqual((await providerStore.listProviderDocs()).map(providerStore.idFr
 
 const preloadDb = new RevisionDbMock();
 const encryptedValues = new Map();
+let floatingWindowOptions = null;
+let floatingWindowReady = null;
+let floatingWindowClosed = null;
+let floatingLayoutResponse = { contentHeight: 240, availableHeight: 1000, availableTop: 0 };
+let floatingBounds = { x: 120, y: 720, width: 360, height: 188 };
+let floatingDestroyed = false;
+const floatingWindowCalls = [];
+const floatingWindowMock = {
+  focus() {
+    floatingWindowCalls.push(["focus"]);
+  },
+  isDestroyed() {
+    return floatingDestroyed;
+  },
+  on(event, listener) {
+    if (event === "closed") {
+      floatingWindowClosed = listener;
+    }
+  },
+  getBounds() {
+    return { ...floatingBounds };
+  },
+  setBounds(nextBounds) {
+    floatingBounds = { ...floatingBounds, ...nextBounds };
+    floatingWindowCalls.push(["setBounds", { ...floatingBounds }]);
+  },
+  getSize() {
+    return [floatingBounds.width, floatingBounds.height];
+  },
+  setSize(width, height) {
+    floatingBounds = { ...floatingBounds, width, height };
+    floatingWindowCalls.push(["setSize", width, height]);
+  },
+  webContents: {
+    async executeJavaScript(script) {
+      floatingWindowCalls.push(["executeJavaScript", script]);
+      return floatingLayoutResponse;
+    }
+  },
+  setAlwaysOnTop(enabled, level) {
+    floatingWindowCalls.push(["setAlwaysOnTop", enabled, level]);
+  },
+  setBackgroundColor(color) {
+    floatingWindowCalls.push(["setBackgroundColor", color]);
+  },
+  setBackgroundMaterial(material) {
+    floatingWindowCalls.push(["setBackgroundMaterial", material]);
+  },
+  setHasShadow(enabled) {
+    floatingWindowCalls.push(["setHasShadow", enabled]);
+  },
+  setShape(rectangles) {
+    floatingWindowCalls.push(["setShape", rectangles]);
+  },
+  setVibrancy(material) {
+    floatingWindowCalls.push(["setVibrancy", material]);
+  },
+  show() {
+    floatingWindowCalls.push(["show"]);
+  }
+};
 const previousWindow = globalThis.window;
 const previousUtools = globalThis.utools;
 globalThis.window = {};
@@ -805,6 +866,12 @@ globalThis.utools = {
     async removeItem(key) {
       encryptedValues.delete(key);
     }
+  },
+  createBrowserWindow(_entry, options, ready) {
+    floatingWindowOptions = options;
+    floatingWindowReady = ready;
+    floatingBounds = { ...floatingBounds, width: options.width, height: options.height };
+    return floatingWindowMock;
   }
 };
 
@@ -812,6 +879,51 @@ require("../public/preload.js");
 const preloadBridge = globalThis.window.quotaBridge;
 assert.ok(preloadBridge);
 assert.ok((await preloadBridge.listOfficialProviderPresets()).length >= 17);
+
+await preloadBridge.openFloatingWindow();
+assert.equal(floatingWindowOptions.transparent, true);
+assert.equal(floatingWindowOptions.hasShadow, false);
+assert.equal(floatingWindowOptions.roundedCorners, false);
+assert.equal(floatingWindowOptions.backgroundColor, "#00000000");
+assert.equal(floatingWindowOptions.show, false);
+assert.equal(typeof floatingWindowReady, "function");
+await floatingWindowReady();
+assert.ok(floatingWindowCalls.some((call) => call[0] === "setBackgroundColor" && call[1] === "#00000000"));
+assert.ok(floatingWindowCalls.some((call) => call[0] === "setHasShadow" && call[1] === false));
+assert.equal(floatingBounds.height, 240);
+const shapeCall = floatingWindowCalls.filter((call) => call[0] === "setShape").at(-1);
+assert.ok(shapeCall);
+assert.ok(shapeCall[1].length > 1);
+assert.ok(shapeCall[1].every((rect) => rect.width > 0 && rect.height > 0));
+assert.ok(!floatingWindowCalls.some((call) => call[0] === "setBackgroundMaterial"));
+assert.ok(!floatingWindowCalls.some((call) => call[0] === "setVibrancy"));
+
+floatingLayoutResponse = { contentHeight: 900, availableHeight: 800, availableTop: 0 };
+await preloadBridge.syncFloatingWindow();
+assert.equal(floatingBounds.height, 560);
+assert.equal(floatingBounds.y, 240);
+
+floatingLayoutResponse = { contentHeight: 210, availableHeight: 1000, availableTop: 0 };
+await preloadBridge.syncFloatingWindow();
+assert.equal(floatingBounds.height, 210);
+assert.equal(floatingBounds.y, 240);
+
+floatingLayoutResponse = { contentHeight: 100, availableHeight: 1000, availableTop: 0 };
+await preloadBridge.syncFloatingWindow();
+assert.equal(floatingBounds.height, 188);
+assert.equal(floatingBounds.y, 240);
+
+const boundsBeforeInvalidLayout = { ...floatingBounds };
+floatingLayoutResponse = null;
+await preloadBridge.syncFloatingWindow();
+assert.deepEqual(floatingBounds, boundsBeforeInvalidLayout);
+
+floatingDestroyed = true;
+floatingLayoutResponse = { contentHeight: 300, availableHeight: 1000, availableTop: 0 };
+await preloadBridge.syncFloatingWindow();
+assert.deepEqual(floatingBounds, boundsBeforeInvalidLayout);
+floatingDestroyed = false;
+floatingWindowClosed?.();
 
 const savedOfficial = await preloadBridge.saveProvider({
   mode: "official",
@@ -826,6 +938,27 @@ assert.equal(savedOfficial.mode, "official");
 assert.equal(savedOfficial.name, "DeepSeek API");
 assert.equal(savedOfficial.baseUrl, "");
 assert.equal(savedOfficial.hasApiKey, true);
+assert.equal(savedOfficial.showInFloatingWindow, true);
+
+const hiddenOfficial = await preloadBridge.setProviderFloatingVisibility(savedOfficial.id, false);
+assert.equal(hiddenOfficial.showInFloatingWindow, false);
+assert.equal((await preloadDb.get(`${PROVIDER_PREFIX}${savedOfficial.id}`)).showInFloatingWindow, false);
+
+const resavedHiddenOfficial = await preloadBridge.saveProvider({
+  id: savedOfficial.id,
+  mode: "official",
+  name: "DeepSeek API",
+  officialPresetId: "deepseek-api",
+  apiKey: "",
+  manualLimit: null,
+  currencyOverride: "",
+  refreshIntervalMinutes: 30
+});
+assert.equal(resavedHiddenOfficial.showInFloatingWindow, false);
+await assert.rejects(
+  () => preloadBridge.setProviderFloatingVisibility(savedOfficial.id, "false"),
+  /浮窗展示状态无效/
+);
 
 const persistedOfficial = (await preloadDb.allDocs(PROVIDER_PREFIX)).find(
   (doc) => doc._id === `${PROVIDER_PREFIX}${savedOfficial.id}`
@@ -901,10 +1034,12 @@ const migratedRelay = migratedProviders.find((provider) => provider.id === "lega
 assert.equal(migratedRelay.mode, "relay");
 assert.equal(migratedRelay.lastMeters[0].remaining, 66);
 assert.equal(migratedRelay.lastMeters[0].unit, "CNY");
+assert.equal(migratedRelay.showInFloatingWindow, true);
 const unknownOfficial = migratedProviders.find((provider) => provider.id === "unknown-official");
 assert.equal(unknownOfficial.mode, "official");
 assert.equal(unknownOfficial.officialPresetAvailable, false);
 assert.equal(unknownOfficial.lastMeters[0].remaining, 5);
+assert.equal(unknownOfficial.showInFloatingWindow, true);
 
 if (previousWindow === undefined) {
   delete globalThis.window;

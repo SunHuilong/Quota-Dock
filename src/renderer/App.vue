@@ -11,18 +11,28 @@ import {
   EyeOff,
   Info,
   Loader2,
+  Monitor,
   MonitorUp,
+  Moon,
   Pencil,
   Plus,
   RefreshCw,
   Save,
   Send,
+  Sun,
   Trash2,
   WalletCards,
   X
 } from "@lucide/vue";
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { getQuotaBridge } from "../shared/bridge";
+import { useGlassPointer } from "../shared/glass-pointer";
+import {
+  getThemeMode,
+  setThemeMode as updateThemeMode,
+  subscribeThemeMode,
+  type ThemeMode
+} from "../shared/theme";
 import {
   formatBalance,
   formatDateTime,
@@ -92,6 +102,11 @@ const JSON_PATH_LABELS: Record<JsonPathKey, string> = {
   resetAt: "重置时间",
   unit: "单位"
 };
+const THEME_MODE_LABELS: Record<ThemeMode, string> = {
+  system: "自动",
+  light: "浅色",
+  dark: "深色"
+};
 const TEMPLATE_PRESETS: TemplatePreset[] = [
   {
     id: "openai-usage",
@@ -138,6 +153,7 @@ const TEMPLATE_PRESETS: TemplatePreset[] = [
 ];
 
 const bridge = getQuotaBridge();
+const logoUrl = new URL("./logo.png", window.location.href).href;
 const providers = ref<QuotaProvider[]>([]);
 const officialPresets = ref<OfficialProviderPresetSummary[]>([]);
 const syncState = ref<SyncState | null>(null);
@@ -150,6 +166,7 @@ const showApiKey = ref(false);
 const errorMessage = ref("");
 const providerFormErrorMessage = ref("");
 const refreshingIds = ref<string[]>([]);
+const updatingFloatingVisibilityIds = ref<string[]>([]);
 const isProviderModalOpen = ref(false);
 const isTemplateConfigOpen = ref(false);
 const isOptionalSettingsOpen = ref(false);
@@ -160,7 +177,19 @@ const testResponse = ref<unknown | null>(null);
 const testSnapshot = ref<QuotaSnapshot | null>(null);
 const testMessage = ref("");
 const selectedJsonLeaf = ref<JsonLeaf | null>(null);
+const themeMode = ref<ThemeMode>(getThemeMode());
+const isThemeMenuOpen = ref(false);
+const themeSwitcherRef = ref<HTMLElement | null>(null);
+const providerCardSpans = reactive<Record<string, number>>({});
+const isProviderMasonryReady = ref(false);
+const providerCardElements = new Map<string, HTMLElement>();
 let refreshTimer = 0;
+let providerMasonryFrame = 0;
+let providerResizeObserver: ResizeObserver | null = null;
+let stopGlassPointer: (() => void) | null = null;
+let stopThemeSubscription: (() => void) | null = null;
+
+const PROVIDER_MASONRY_GAP = 9;
 
 const form = reactive({
   id: "",
@@ -409,6 +438,16 @@ function setRefreshing(id: string, value: boolean) {
   refreshingIds.value = value
     ? [...new Set([...refreshingIds.value, id])]
     : refreshingIds.value.filter((item) => item !== id);
+}
+
+function isUpdatingFloatingVisibility(id: string) {
+  return updatingFloatingVisibilityIds.value.includes(id);
+}
+
+function setUpdatingFloatingVisibility(id: string, value: boolean) {
+  updatingFloatingVisibilityIds.value = value
+    ? [...new Set([...updatingFloatingVisibilityIds.value, id])]
+    : updatingFloatingVisibilityIds.value.filter((item) => item !== id);
 }
 
 function setRequestMethod(method: RequestMethod) {
@@ -731,7 +770,133 @@ async function openFloatingWindow() {
   }
 }
 
+async function toggleProviderFloatingVisibility(provider: QuotaProvider) {
+  if (isUpdatingFloatingVisibility(provider.id)) {
+    return;
+  }
+
+  const previousVisible = provider.showInFloatingWindow;
+  const nextVisible = !previousVisible;
+  setUpdatingFloatingVisibility(provider.id, true);
+  errorMessage.value = "";
+  providers.value = providers.value.map((item) =>
+    item.id === provider.id ? { ...item, showInFloatingWindow: nextVisible } : item
+  );
+
+  try {
+    const updated = await bridge.setProviderFloatingVisibility(provider.id, nextVisible);
+    providers.value = providers.value.map((item) => (item.id === updated.id ? updated : item));
+
+    try {
+      await bridge.syncFloatingWindow();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "浮窗同步失败";
+      errorMessage.value = `设置已保存，但浮窗同步失败：${message}`;
+    }
+  } catch (error) {
+    providers.value = providers.value.map((item) =>
+      item.id === provider.id ? { ...item, showInFloatingWindow: previousVisible } : item
+    );
+    setError(error, "更新浮窗展示状态失败");
+  } finally {
+    setUpdatingFloatingVisibility(provider.id, false);
+  }
+}
+
+function toggleThemeMenu() {
+  isThemeMenuOpen.value = !isThemeMenuOpen.value;
+}
+
+function chooseThemeMode(nextMode: ThemeMode) {
+  updateThemeMode(nextMode);
+  isThemeMenuOpen.value = false;
+}
+
+function handleThemePointerDown(event: PointerEvent) {
+  if (
+    !isThemeMenuOpen.value ||
+    !(event.target instanceof Node) ||
+    themeSwitcherRef.value?.contains(event.target)
+  ) {
+    return;
+  }
+
+  isThemeMenuOpen.value = false;
+}
+
+function handleThemeKeyDown(event: KeyboardEvent) {
+  if (event.key === "Escape") {
+    isThemeMenuOpen.value = false;
+  }
+}
+
+function measureProviderMasonry() {
+  providerMasonryFrame = 0;
+  const activeIds = new Set(providers.value.map((provider) => provider.id));
+  let measuredCount = 0;
+
+  for (const provider of providers.value) {
+    const element = providerCardElements.get(provider.id);
+    if (!element?.isConnected) {
+      continue;
+    }
+
+    const height = element.getBoundingClientRect().height;
+    if (height <= 0) {
+      continue;
+    }
+
+    providerCardSpans[provider.id] = Math.max(1, Math.ceil(height + PROVIDER_MASONRY_GAP));
+    measuredCount += 1;
+  }
+
+  for (const providerId of Object.keys(providerCardSpans)) {
+    if (!activeIds.has(providerId)) {
+      delete providerCardSpans[providerId];
+    }
+  }
+
+  isProviderMasonryReady.value = measuredCount === providers.value.length && measuredCount > 0;
+}
+
+function scheduleProviderMasonry() {
+  if (!providerMasonryFrame) {
+    providerMasonryFrame = window.requestAnimationFrame(measureProviderMasonry);
+  }
+}
+
+function setProviderCardElement(providerId: string, element: unknown) {
+  const previous = providerCardElements.get(providerId);
+  const next = element instanceof HTMLElement ? element : null;
+
+  if (previous && previous !== next) {
+    providerResizeObserver?.unobserve(previous);
+    providerCardElements.delete(providerId);
+  }
+
+  if (next) {
+    providerCardElements.set(providerId, next);
+    providerResizeObserver?.observe(next);
+  }
+
+  if (providerCardElements.size !== providers.value.length) {
+    isProviderMasonryReady.value = false;
+  }
+  scheduleProviderMasonry();
+}
+
 onMounted(() => {
+  stopGlassPointer = useGlassPointer();
+  providerResizeObserver = new ResizeObserver(scheduleProviderMasonry);
+  for (const element of providerCardElements.values()) {
+    providerResizeObserver.observe(element);
+  }
+  scheduleProviderMasonry();
+  stopThemeSubscription = subscribeThemeMode((nextMode) => {
+    themeMode.value = nextMode;
+  });
+  document.addEventListener("pointerdown", handleThemePointerDown);
+  document.addEventListener("keydown", handleThemeKeyDown);
   void bootstrap();
   refreshTimer = window.setInterval(() => {
     void refreshDueSilently();
@@ -739,56 +904,120 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  stopGlassPointer?.();
+  stopThemeSubscription?.();
+  providerResizeObserver?.disconnect();
+  if (providerMasonryFrame) {
+    window.cancelAnimationFrame(providerMasonryFrame);
+  }
+  document.removeEventListener("pointerdown", handleThemePointerDown);
+  document.removeEventListener("keydown", handleThemeKeyDown);
   window.clearInterval(refreshTimer);
 });
 </script>
 
 <template>
-  <main class="app-shell">
-    <section class="top-bar">
-      <div class="brand-block compact-brand">
-        <div>
-          <h1>AI 额度查询</h1>
-          <p>{{ providerCount }} 个站点</p>
+  <main class="app-shell" data-glass-reactive>
+    <section class="top-bar glass-surface">
+      <div class="brand-block">
+        <img class="brand-mark" :src="logoUrl" alt="" />
+        <div class="brand-copy">
+          <h1>Quota Dock</h1>
+          <p>AI 额度看板 <span aria-hidden="true">·</span> {{ providerCount }} 个站点</p>
         </div>
       </div>
       <div class="header-actions">
-        <button class="button button-ghost" type="button" @click="openFloatingWindow">
-          <MonitorUp :size="16" />
-          浮窗
-        </button>
-        <button class="button button-ghost" type="button" :disabled="refreshingAll || !providerCount" @click="refreshAll">
-          <RefreshCw :size="16" :class="{ spinning: refreshingAll }" />
-          刷新
-        </button>
+        <div class="toolbar-group" aria-label="看板工具">
+          <div ref="themeSwitcherRef" class="theme-switcher">
+            <button
+              class="icon-button theme-trigger"
+              type="button"
+              :title="`显示模式：${THEME_MODE_LABELS[themeMode]}`"
+              :aria-label="`显示模式：${THEME_MODE_LABELS[themeMode]}`"
+              aria-haspopup="true"
+              :aria-expanded="isThemeMenuOpen"
+              aria-controls="theme-mode-menu"
+              @click="toggleThemeMenu"
+            >
+              <Monitor v-if="themeMode === 'system'" :size="17" />
+              <Sun v-else-if="themeMode === 'light'" :size="17" />
+              <Moon v-else :size="17" />
+            </button>
+            <Transition name="theme-menu">
+              <div v-if="isThemeMenuOpen" id="theme-mode-menu" class="theme-menu" role="group" aria-label="显示模式">
+                <button
+                  class="theme-option"
+                  :class="{ active: themeMode === 'system' }"
+                  type="button"
+                  title="自动"
+                  aria-label="自动"
+                  :aria-pressed="themeMode === 'system'"
+                  @click="chooseThemeMode('system')"
+                >
+                  <Monitor :size="17" />
+                </button>
+                <button
+                  class="theme-option"
+                  :class="{ active: themeMode === 'light' }"
+                  type="button"
+                  title="浅色"
+                  aria-label="浅色"
+                  :aria-pressed="themeMode === 'light'"
+                  @click="chooseThemeMode('light')"
+                >
+                  <Sun :size="17" />
+                </button>
+                <button
+                  class="theme-option"
+                  :class="{ active: themeMode === 'dark' }"
+                  type="button"
+                  title="深色"
+                  aria-label="深色"
+                  :aria-pressed="themeMode === 'dark'"
+                  @click="chooseThemeMode('dark')"
+                >
+                  <Moon :size="17" />
+                </button>
+              </div>
+            </Transition>
+          </div>
+          <button class="button button-ghost" type="button" @click="openFloatingWindow">
+            <MonitorUp :size="16" />
+            <span>浮窗</span>
+          </button>
+          <button class="button button-ghost" type="button" :disabled="refreshingAll || !providerCount" @click="refreshAll">
+            <RefreshCw :size="16" :class="{ spinning: refreshingAll }" />
+            <span>刷新</span>
+          </button>
+        </div>
         <button class="button button-primary" type="button" @click="openCreateModal">
           <Plus :size="16" />
-          添加站点
+          <span>添加站点</span>
         </button>
       </div>
     </section>
 
-    <section class="summary-strip" aria-label="额度概览">
+    <section class="summary-strip glass-surface" aria-label="额度概览">
       <article class="summary-chip">
-        <span>总余额</span>
-        <strong v-if="balanceTotals.length" class="summary-balance-values">
+        <span class="summary-label">总余额</span>
+        <strong v-if="balanceTotals.length" class="summary-value summary-balance-values">
           <span v-for="item in balanceTotals" :key="item.unit">
             {{ formatQuotaValue(item.total) }} {{ item.unit }}
           </span>
         </strong>
-        <strong v-else>--</strong>
+        <strong v-else class="summary-value">--</strong>
       </article>
       <article class="summary-chip">
-        <span>可用</span>
-        <strong>{{ activeCount }} / {{ providerCount }}</strong>
+        <span class="summary-label">可用</span>
+        <strong class="summary-value">{{ activeCount }} / {{ providerCount }}</strong>
       </article>
       <article class="summary-chip">
-        <span>最近刷新</span>
-        <strong>{{ formatDateTime(lastCheckedAt) }}</strong>
+        <span class="summary-label">最近刷新</span>
+        <strong class="summary-value">{{ formatDateTime(lastCheckedAt) }}</strong>
       </article>
       <article class="summary-chip" :class="`tone-${syncTone}`">
-        <span>同步</span>
-        <strong>
+        <span class="summary-label">同步</span>
+        <strong class="summary-value">
           <Cloud v-if="syncTone === 'ok'" :size="15" />
           <Clock3 v-else-if="syncTone === 'warn'" :size="15" />
           <CloudOff v-else :size="15" />
@@ -797,28 +1026,38 @@ onBeforeUnmount(() => {
       </article>
     </section>
 
-    <p v-if="errorMessage" class="notice notice-error">
+    <p v-if="errorMessage" class="notice notice-error glass-surface" role="alert">
       <AlertTriangle :size="16" />
       {{ errorMessage }}
     </p>
 
-    <section class="provider-panel">
-      <div v-if="loading" class="empty-state">
+    <section class="provider-panel" aria-label="站点额度列表">
+      <div v-if="loading" class="empty-state glass-surface" aria-live="polite">
         <Loader2 :size="22" class="spinning" />
         <span>正在加载配置</span>
       </div>
 
-      <div v-else-if="!providers.length" class="empty-state">
-        <WalletCards :size="26" />
-        <span>还没有站点</span>
+      <div v-else-if="!providers.length" class="empty-state glass-surface">
+        <span class="empty-state-icon"><WalletCards :size="27" /></span>
+        <strong>还没有站点</strong>
+        <span>添加一个平台，开始集中查看余额和额度。</span>
         <button class="button button-primary" type="button" @click="openCreateModal">
           <Plus :size="16" />
           添加站点
         </button>
       </div>
 
-      <div v-else class="provider-list">
-        <article v-for="provider in providers" :key="provider.id" class="provider-item">
+      <div v-else class="provider-list" :class="{ 'masonry-ready': isProviderMasonryReady }">
+        <article
+          v-for="(provider, index) in providers"
+          :key="provider.id"
+          :ref="(element) => setProviderCardElement(provider.id, element)"
+          class="provider-item glass-surface"
+          :style="{
+            '--provider-column': (index % 2) + 1,
+            '--provider-row-span': providerCardSpans[provider.id] || 1
+          }"
+        >
           <div class="provider-main">
             <div class="provider-info">
               <div class="provider-title-row">
@@ -896,6 +1135,19 @@ onBeforeUnmount(() => {
               </div>
 
               <div class="provider-actions">
+                <button
+                  class="provider-floating-toggle"
+                  type="button"
+                  role="switch"
+                  :aria-checked="provider.showInFloatingWindow"
+                  :aria-label="provider.showInFloatingWindow ? '从浮窗隐藏' : '在浮窗展示'"
+                  :title="provider.showInFloatingWindow ? '从浮窗隐藏' : '在浮窗展示'"
+                  :disabled="isUpdatingFloatingVisibility(provider.id)"
+                  @click="toggleProviderFloatingVisibility(provider)"
+                >
+                  <span>浮窗</span>
+                  <span class="provider-floating-switch" aria-hidden="true"></span>
+                </button>
                 <button class="icon-button" type="button" title="编辑" aria-label="编辑" @click="editProvider(provider)">
                   <Pencil :size="15" />
                 </button>
@@ -910,12 +1162,20 @@ onBeforeUnmount(() => {
     </section>
 
     <teleport to="body">
-      <div v-if="isProviderModalOpen" class="modal-layer" @click.self="closeProviderModal">
-        <form class="modal-card provider-modal" @submit.prevent="saveProvider">
+      <Transition name="modal-fade">
+        <div v-if="isProviderModalOpen" class="modal-layer" @click.self="closeProviderModal">
+          <form
+            class="modal-card provider-modal glass-surface"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="provider-modal-title"
+            @submit.prevent="saveProvider"
+          >
+          <div class="provider-modal-scroll">
           <div class="modal-heading">
             <div>
               <p class="eyebrow">{{ form.mode === "official" ? "Preset Provider" : "Relay Provider" }}</p>
-              <h2>{{ isEditing ? "编辑站点" : "添加站点" }}</h2>
+              <h2 id="provider-modal-title">{{ isEditing ? "编辑站点" : "添加站点" }}</h2>
             </div>
             <button class="icon-button" type="button" title="关闭" aria-label="关闭" @click="closeProviderModal">
               <X :size="18" />
@@ -1318,15 +1578,23 @@ onBeforeUnmount(() => {
               </button>
             </div>
           </div>
-        </form>
-      </div>
+          </div>
+          </form>
+        </div>
+      </Transition>
 
-      <div v-if="pendingDeleteProvider" class="modal-layer" @click.self="closeDeleteDialog">
-        <section class="modal-card delete-modal">
+      <Transition name="modal-fade">
+        <div v-if="pendingDeleteProvider" class="modal-layer" @click.self="closeDeleteDialog">
+          <section
+            class="modal-card delete-modal glass-surface"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-modal-title"
+          >
           <div class="delete-icon">
             <Trash2 :size="24" />
           </div>
-          <h2>删除站点</h2>
+          <h2 id="delete-modal-title">删除站点</h2>
           <p>确认删除「{{ pendingDeleteProvider.name }}」？配置和加密保存的 API Key 会一起删除。</p>
           <div class="modal-actions">
             <button class="button button-ghost" type="button" :disabled="deleting" @click="closeDeleteDialog">取消</button>
@@ -1336,8 +1604,9 @@ onBeforeUnmount(() => {
               删除
             </button>
           </div>
-        </section>
-      </div>
+          </section>
+        </div>
+      </Transition>
     </teleport>
   </main>
 </template>

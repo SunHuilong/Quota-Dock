@@ -64,6 +64,7 @@ export interface QuotaProvider {
   defaultUnit: string;
   priceMultiplier: number;
   refreshIntervalMinutes: number;
+  showInFloatingWindow: boolean;
   lastPrimaryMeterId: string | null;
   lastMeters: QuotaMeter[];
   lastBalance: number | null;
@@ -120,6 +121,7 @@ export interface QuotaBridge {
   listOfficialProviderPresets(): Promise<OfficialProviderPresetSummary[]>;
   listProviders(): Promise<QuotaProvider[]>;
   saveProvider(input: ProviderInput): Promise<QuotaProvider>;
+  setProviderFloatingVisibility(id: string, visible: boolean): Promise<QuotaProvider>;
   testProviderRequest(input: RelayProviderInput): Promise<unknown>;
   testOfficialProvider(input: OfficialProviderInput): Promise<QuotaSnapshot>;
   deleteProvider(id: string): Promise<boolean>;

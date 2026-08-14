@@ -2,6 +2,7 @@
 import { AlertTriangle, CheckCircle2, Loader2, RefreshCw, WalletCards, X } from "@lucide/vue";
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import { getQuotaBridge } from "../shared/bridge";
+import { useGlassPointer } from "../shared/glass-pointer";
 import {
   formatBalance,
   formatDateTime,
@@ -18,19 +19,22 @@ import {
 import type { QuotaProvider } from "../shared/types";
 
 const bridge = getQuotaBridge();
+const logoUrl = new URL("./logo.png", window.location.href).href;
 const providers = ref<QuotaProvider[]>([]);
 const loading = ref(true);
 const refreshing = ref(false);
 const errorMessage = ref("");
 let refreshTimer = 0;
+let stopGlassPointer: (() => void) | null = null;
 
 function setError(error: unknown, fallback: string) {
   errorMessage.value = error instanceof Error ? error.message : fallback;
 }
 
 async function applyProviders(nextProviders: QuotaProvider[]) {
-  providers.value = nextProviders;
-  return nextProviders.length;
+  const visibleProviders = nextProviders.filter((provider) => provider.showInFloatingWindow !== false);
+  providers.value = visibleProviders;
+  return visibleProviders.length;
 }
 
 async function syncProviders() {
@@ -79,6 +83,7 @@ function additionalMeters(provider: QuotaProvider) {
 }
 
 onMounted(async () => {
+  stopGlassPointer = useGlassPointer();
   window.__quotaSyncProviders = syncProviders;
   loading.value = true;
   await loadDue();
@@ -89,6 +94,7 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  stopGlassPointer?.();
   if (window.__quotaSyncProviders === syncProviders) {
     delete window.__quotaSyncProviders;
   }
@@ -97,10 +103,14 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main class="floating-shell">
+  <main class="floating-shell glass-surface" data-glass-reactive>
     <header class="floating-header">
       <div class="floating-title">
-        <span>AI 额度</span>
+        <img class="floating-logo" :src="logoUrl" alt="" />
+        <div>
+          <strong>Quota Dock</strong>
+          <span>{{ providers.length }} 个站点</span>
+        </div>
       </div>
       <div class="floating-actions">
         <button class="icon-button compact no-drag" type="button" title="刷新" aria-label="刷新" :disabled="refreshing" @click="refreshAll">
@@ -112,7 +122,7 @@ onBeforeUnmount(() => {
       </div>
     </header>
 
-    <p v-if="errorMessage" class="floating-notice">
+    <p v-if="errorMessage" class="floating-notice" role="alert">
       <AlertTriangle :size="15" />
       {{ errorMessage }}
     </p>
@@ -128,7 +138,7 @@ onBeforeUnmount(() => {
     </section>
 
     <section v-else class="floating-list">
-      <article v-for="provider in providers" :key="provider.id" class="floating-item">
+      <article v-for="provider in providers" :key="provider.id" class="floating-item glass-surface">
         <div>
           <div class="floating-name-row">
             <strong>{{ provider.name }}</strong>

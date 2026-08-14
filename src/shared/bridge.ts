@@ -40,6 +40,9 @@ function createUnavailableBridge(): QuotaBridge {
     saveProvider(_input: ProviderInput): Promise<QuotaProvider> {
       return fail();
     },
+    setProviderFloatingVisibility(_id: string, _visible: boolean): Promise<QuotaProvider> {
+      return fail();
+    },
     testProviderRequest(_input: RelayProviderInput): Promise<unknown> {
       return fail();
     },

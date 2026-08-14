@@ -1,6 +1,6 @@
 {
   "pluginName": "Quota Dock - AI额度看板",
-  "description": "Quota Dock 是一款 AI API 余额与额度查询 uTools 插件，支持官方预设平台与中转站专业模式。内置 DeepSeek、Kimi、阶跃星辰 StepFun、硅基流动 SiliconFlow、302.AI、Novita AI、OpenRouter、MiniMax Token Plan、智谱 GLM Coding Plan、Z.AI Coding Plan、xAI / Grok、OpenAI Organization、Anthropic Organization 和 AIHubMix 等平台。可集中查看多站点余额、总额度、已用额度、套餐用量、重置时间和多货币汇总；中转站支持自定义 Base URL、API Key、请求参数及 JSON 字段映射，并提供自动刷新与浮窗监控。",
+  "description": "Quota Dock 用于集中查询和监控 AI API 平台的账户余额与套餐额度。\n\n支持平台\nDeepSeek\nKimi\n阶跃星辰 StepFun\n硅基流动 SiliconFlow\n302.AI\nNovita AI\nOpenRouter\nMiniMax Token Plan\n智谱 GLM Coding Plan\nZ.AI Coding Plan\nxAI / Grok\nOpenAI Organization\nAnthropic Organization\nAIHubMix\n\n支持查询\n账户余额\n总额度与已用额度\nCoding Plan 套餐额度\n额度重置时间\n多货币余额汇总\n\n主要功能\n集中管理官方平台与中转站\n支持自定义 Base URL、API Key、请求参数和 JSON 字段映射\n自动刷新余额与额度\n桌面浮窗实时监控",
   "author": "Codex",
   "homepage": "",
   "version": "0.1.0",
