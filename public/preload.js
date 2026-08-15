@@ -55,6 +55,18 @@
       shouldRefreshProvider,
       createResponseErrorMessage
     } = require("./libs/quota-core.js");
+    const {
+      DEFAULT_REFRESH_CONCURRENCY,
+      DEFAULT_STALE_AFTER_MINUTES,
+      MCP_TOOL_NAMES,
+      createHealthReport,
+      createOverview,
+      createRefreshBatch,
+      createRefreshOutcome,
+      normalizeHealthThresholds,
+      projectProviderDetail,
+      runBoundedTasks
+    } = require("./libs/quota-mcp.js");
 
     const API_KEY_PREFIX = "quota-api-key/";
     const FLOATING_WINDOW_WIDTH = 360;
@@ -120,6 +132,7 @@
     let floatingWindow = null;
     let floatingLayoutTask = null;
     let floatingLayoutTimer = null;
+    const providerRefreshFlights = new Map();
 
     function requireUtools() {
       if (!utoolsApi || !utoolsApi.db || !utoolsApi.db.promises) {
@@ -561,7 +574,7 @@
       return true;
     }
 
-    async function refreshProvider(id) {
+    async function performProviderRefresh(id) {
       const api = requireUtools();
       const doc = await getProviderDoc(id);
       const apiKey = api.dbCryptoStorage.getItem(apiKeyStorageKey(id));
@@ -636,14 +649,69 @@
       }
     }
 
+    function refreshProvider(id) {
+      const providerId = String(id || "").trim();
+      if (!providerId) {
+        return Promise.reject(new Error("站点 ID 不能为空"));
+      }
+
+      const existingFlight = providerRefreshFlights.get(providerId);
+      if (existingFlight) {
+        return existingFlight;
+      }
+
+      const flight = performProviderRefresh(providerId).finally(() => {
+        if (providerRefreshFlights.get(providerId) === flight) {
+          providerRefreshFlights.delete(providerId);
+        }
+      });
+      providerRefreshFlights.set(providerId, flight);
+      return flight;
+    }
+
+    function refreshItemFromDoc(doc) {
+      return {
+        id: idFromDoc(doc),
+        name: String((doc && doc.name) || "未命名站点").trim() || "未命名站点"
+      };
+    }
+
+    async function runProviderRefreshBatch(docs, scope, ctx) {
+      const items = docs.map(refreshItemFromDoc);
+      const taskResults = await runBoundedTasks(
+        items,
+        (item) => refreshProvider(item.id),
+        {
+          concurrency: DEFAULT_REFRESH_CONCURRENCY,
+          onProgress: async ({ progress, total, item, result }) => {
+            if (!ctx || typeof ctx.sendProgress !== "function") {
+              return;
+            }
+
+            const outcome = createRefreshOutcome(result, {
+              nowMs: Date.now(),
+              staleAfterMinutes: DEFAULT_STALE_AFTER_MINUTES
+            });
+            const message = outcome.success
+              ? `已刷新站点：${item.name}`
+              : `站点刷新未成功：${item.name}`;
+            await ctx.sendProgress({ progress, total, message: message.slice(0, 2000) });
+          }
+        }
+      );
+
+      return createRefreshBatch(scope, taskResults, {
+        nowMs: Date.now(),
+        staleAfterMinutes: DEFAULT_STALE_AFTER_MINUTES
+      });
+    }
+
     async function refreshDueProviders() {
       const now = Date.now();
       const docs = await listProviderDocs();
       const dueDocs = docs.filter((doc) => shouldRefreshProvider(doc, now));
 
-      for (const doc of dueDocs) {
-        await refreshProvider(idFromDoc(doc));
-      }
+      await runProviderRefreshBatch(dueDocs, "due");
 
       return listProviders();
     }
@@ -651,9 +719,7 @@
     async function refreshAll() {
       const docs = await listProviderDocs();
 
-      for (const doc of docs) {
-        await refreshProvider(idFromDoc(doc));
-      }
+      await runProviderRefreshBatch(docs, "all");
 
       return listProviders();
     }
@@ -662,6 +728,18 @@
       if (floatingLayoutTimer) {
         clearInterval(floatingLayoutTimer);
         floatingLayoutTimer = null;
+      }
+    }
+
+    function isFloatingWindowOpen() {
+      if (!floatingWindow) {
+        return false;
+      }
+
+      try {
+        return typeof floatingWindow.isDestroyed !== "function" || !floatingWindow.isDestroyed();
+      } catch {
+        return false;
       }
     }
 
@@ -818,7 +896,7 @@
         throw new Error("当前 uTools 环境不支持创建浮窗");
       }
 
-      if (floatingWindow && (!floatingWindow.isDestroyed || !floatingWindow.isDestroyed())) {
+      if (isFloatingWindowOpen()) {
         await syncFloatingWindow();
         startFloatingLayoutMonitor();
         if (floatingWindow.show) {
@@ -830,7 +908,9 @@
         return true;
       }
 
-      floatingWindow = api.createBrowserWindow(
+      floatingWindow = null;
+      let createdWindow = null;
+      createdWindow = api.createBrowserWindow(
         "floating.html",
         {
           width: FLOATING_WINDOW_WIDTH,
@@ -855,30 +935,307 @@
           }
         },
         async () => {
-          applyFloatingWindowSurface(floatingWindow, FLOATING_WINDOW_WIDTH, FLOATING_WINDOW_MIN_HEIGHT);
+          if (!createdWindow || floatingWindow !== createdWindow || !isFloatingWindowOpen()) {
+            return;
+          }
+          applyFloatingWindowSurface(createdWindow, FLOATING_WINDOW_WIDTH, FLOATING_WINDOW_MIN_HEIGHT);
           await syncFloatingWindow();
           startFloatingLayoutMonitor();
-          if (floatingWindow && floatingWindow.show) {
-            floatingWindow.show();
+          if (floatingWindow === createdWindow && createdWindow.show) {
+            createdWindow.show();
           }
-          if (floatingWindow && floatingWindow.setAlwaysOnTop) {
-            floatingWindow.setAlwaysOnTop(true, "floating");
+          if (floatingWindow === createdWindow && createdWindow.setAlwaysOnTop) {
+            createdWindow.setAlwaysOnTop(true, "floating");
           }
         }
       );
+      floatingWindow = createdWindow;
 
-      if (floatingWindow && floatingWindow.on) {
-        floatingWindow.on("closed", () => {
-          stopFloatingLayoutMonitor();
-          floatingWindow = null;
+      if (createdWindow && createdWindow.on) {
+        createdWindow.on("closed", () => {
+          if (floatingWindow === createdWindow) {
+            stopFloatingLayoutMonitor();
+            floatingLayoutTask = null;
+            floatingWindow = null;
+          }
         });
       }
 
       return true;
     }
 
-    root.__quotaPreloadReady = true;
-    root.__quotaPreloadError = null;
+    async function closeFloatingWindow() {
+      stopFloatingLayoutMonitor();
+
+      if (!isFloatingWindowOpen()) {
+        floatingWindow = null;
+        floatingLayoutTask = null;
+        return true;
+      }
+
+      const targetWindow = floatingWindow;
+      floatingWindow = null;
+      floatingLayoutTask = null;
+
+      if (typeof targetWindow.close === "function") {
+        await Promise.resolve(targetWindow.close());
+      } else if (typeof targetWindow.destroy === "function") {
+        await Promise.resolve(targetWindow.destroy());
+      }
+
+      return true;
+    }
+
+    function normalizeToolInput(input, allowedProperties) {
+      const source = input === undefined || input === null ? {} : input;
+      if (!source || typeof source !== "object" || Array.isArray(source)) {
+        throw new TypeError("工具输入必须是对象");
+      }
+
+      const allowed = new Set(allowedProperties);
+      const unknownProperties = Object.keys(source).filter((key) => !allowed.has(key));
+      if (unknownProperties.length > 0) {
+        throw new TypeError(`工具输入包含未知字段：${unknownProperties.join(", ")}`);
+      }
+      return source;
+    }
+
+    function normalizeProviderId(value) {
+      const providerId = typeof value === "string" ? value.trim() : "";
+      if (!providerId || providerId.length > 256) {
+        throw new TypeError("providerId 必须是长度不超过 256 的非空字符串");
+      }
+      return providerId;
+    }
+
+    async function getKnownProviderDoc(providerId) {
+      const docs = await listProviderDocs();
+      const doc = docs.find((item) => idFromDoc(item) === providerId);
+      if (!doc) {
+        throw new Error(`未知站点 ID：${providerId}`);
+      }
+      return doc;
+    }
+
+    async function selectRefreshDocs(input) {
+      const source = normalizeToolInput(input, ["scope", "providerIds"]);
+      const scope = source.scope;
+      if (scope !== "due" && scope !== "all" && scope !== "selected") {
+        throw new TypeError("scope 必须是 due、all 或 selected");
+      }
+
+      const docs = await listProviderDocs();
+      if (scope === "all") {
+        if (source.providerIds !== undefined) {
+          throw new TypeError("providerIds 仅在 scope 为 selected 时可用");
+        }
+        return { scope, docs };
+      }
+      if (scope === "due") {
+        if (source.providerIds !== undefined) {
+          throw new TypeError("providerIds 仅在 scope 为 selected 时可用");
+        }
+        const now = Date.now();
+        return { scope, docs: docs.filter((doc) => shouldRefreshProvider(doc, now)) };
+      }
+
+      if (!Array.isArray(source.providerIds) || source.providerIds.length === 0) {
+        throw new TypeError("scope 为 selected 时 providerIds 必须是非空数组");
+      }
+      if (source.providerIds.length > 100) {
+        throw new TypeError("providerIds 最多包含 100 个站点 ID");
+      }
+
+      const providerIds = source.providerIds.map(normalizeProviderId);
+      if (new Set(providerIds).size !== providerIds.length) {
+        throw new TypeError("providerIds 不能包含重复站点 ID");
+      }
+
+      const docsById = new Map(docs.map((doc) => [idFromDoc(doc), doc]));
+      const unknownIds = providerIds.filter((providerId) => !docsById.has(providerId));
+      if (unknownIds.length > 0) {
+        throw new Error(`未知站点 ID：${unknownIds.join(", ")}`);
+      }
+
+      return {
+        scope,
+        docs: providerIds.map((providerId) => docsById.get(providerId))
+      };
+    }
+
+    async function runMcpRefreshBatch(docs, scope, ctx) {
+      const refresh = await runProviderRefreshBatch(docs, scope, ctx);
+      await syncFloatingWindow();
+      return refresh;
+    }
+
+    async function quotaOverviewTool(input, ctx) {
+      normalizeToolInput(input, []);
+      const docs = await listProviderDocs();
+      const refresh = await runMcpRefreshBatch(docs, "all", ctx);
+      const providers = await listProviders();
+      return {
+        ...createOverview(providers, {
+          nowMs: Date.now(),
+          staleAfterMinutes: DEFAULT_STALE_AFTER_MINUTES
+        }),
+        refresh
+      };
+    }
+
+    async function quotaProviderDetailTool(input, ctx) {
+      const source = normalizeToolInput(input, ["providerId"]);
+      const providerId = normalizeProviderId(source.providerId);
+      const doc = await getKnownProviderDoc(providerId);
+      const refresh = await runMcpRefreshBatch([doc], "selected", ctx);
+      const provider = (await listProviders()).find((item) => item.id === providerId);
+      if (!provider) {
+        throw new Error(`未知站点 ID：${providerId}`);
+      }
+
+      const nowMs = Date.now();
+      return {
+        generatedAt: new Date(nowMs).toISOString(),
+        refresh,
+        provider: projectProviderDetail(provider, {
+          nowMs,
+          staleAfterMinutes: DEFAULT_STALE_AFTER_MINUTES
+        })
+      };
+    }
+
+    async function quotaRefreshTool(input, ctx) {
+      const selection = await selectRefreshDocs(input);
+      const refresh = await runMcpRefreshBatch(selection.docs, selection.scope, ctx);
+      return {
+        generatedAt: new Date().toISOString(),
+        ...refresh
+      };
+    }
+
+    async function quotaHealthCheckTool(input, ctx) {
+      const source = normalizeToolInput(input, ["remainingPercentBelow", "staleAfterMinutes"]);
+      const thresholds = normalizeHealthThresholds(source);
+      const docs = await listProviderDocs();
+      const refresh = await runMcpRefreshBatch(docs, "all", ctx);
+      const providers = await listProviders();
+      return {
+        ...createHealthReport(providers, thresholds, { nowMs: Date.now() }),
+        refresh
+      };
+    }
+
+    async function quotaSupportedPlatformsTool(input) {
+      const source = normalizeToolInput(input, ["category"]);
+      const category = source.category === undefined ? null : source.category;
+      if (category !== null && category !== "api" && category !== "plan" && category !== "admin") {
+        throw new TypeError("category 必须是 api、plan 或 admin");
+      }
+
+      const presets = await listPresetSummaries();
+      const platforms = presets
+        .filter((preset) => category === null || preset.category === category)
+        .map((preset) => ({
+          id: preset.id,
+          name: preset.name,
+          category: preset.category,
+          categoryLabel: preset.categoryLabel,
+          credentialLabel: preset.credentialLabel,
+          credentialHelp: preset.credentialHelp,
+          defaultUnit: preset.defaultUnit,
+          supportsManualLimit: preset.supportsManualLimit,
+          supportsCurrencyOverride: preset.supportsCurrencyOverride
+        }));
+
+      return {
+        generatedAt: new Date().toISOString(),
+        category,
+        platformCount: platforms.length,
+        platforms
+      };
+    }
+
+    async function getFloatingToolState() {
+      const providers = await listProviders();
+      return {
+        isOpen: isFloatingWindowOpen(),
+        providers: providers.map((provider) => ({
+          providerId: provider.id,
+          name: provider.name,
+          visible: provider.showInFloatingWindow !== false
+        }))
+      };
+    }
+
+    async function quotaFloatingWindowTool(input) {
+      const source = normalizeToolInput(input, ["action"]);
+      if (source.action !== "open" && source.action !== "close") {
+        throw new TypeError("action 必须是 open 或 close");
+      }
+
+      if (source.action === "open") {
+        await openFloatingWindow();
+      } else {
+        await closeFloatingWindow();
+      }
+      return getFloatingToolState();
+    }
+
+    async function quotaSetFloatingVisibilityTool(input) {
+      const source = normalizeToolInput(input, ["providerId", "visible"]);
+      const providerId = normalizeProviderId(source.providerId);
+      if (typeof source.visible !== "boolean") {
+        throw new TypeError("visible 必须是布尔值");
+      }
+
+      const provider = await setProviderFloatingVisibility(providerId, source.visible);
+      await syncFloatingWindow();
+      const state = await getFloatingToolState();
+      return {
+        ...state,
+        provider: {
+          providerId: provider.id,
+          name: provider.name,
+          visible: provider.showInFloatingWindow !== false
+        }
+      };
+    }
+
+    function isFloatingPreloadEntry() {
+      const location = root && root.location;
+      if (!location) {
+        return false;
+      }
+
+      const pathname = String(location.pathname || "").replace(/\\/g, "/");
+      return /(?:^|\/)floating\.html$/i.test(pathname);
+    }
+
+    function registerMcpTools() {
+      if (
+        isFloatingPreloadEntry() ||
+        !utoolsApi ||
+        typeof utoolsApi.registerTool !== "function"
+      ) {
+        return false;
+      }
+
+      const handlers = {
+        quota_overview: quotaOverviewTool,
+        quota_provider_detail: quotaProviderDetailTool,
+        quota_refresh: quotaRefreshTool,
+        quota_health_check: quotaHealthCheckTool,
+        quota_supported_platforms: quotaSupportedPlatformsTool,
+        quota_floating_window: quotaFloatingWindowTool,
+        quota_set_floating_visibility: quotaSetFloatingVisibilityTool
+      };
+
+      for (const toolName of MCP_TOOL_NAMES) {
+        utoolsApi.registerTool(toolName, handlers[toolName]);
+      }
+      return true;
+    }
+
     root.quotaBridge = {
       getSyncState,
       listOfficialProviderPresets: listPresetSummaries,
@@ -894,6 +1251,9 @@
       syncFloatingWindow,
       openFloatingWindow
     };
+    registerMcpTools();
+    root.__quotaPreloadReady = true;
+    root.__quotaPreloadError = null;
   } catch (error) {
     exposePreloadError(error);
   }

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
@@ -35,6 +36,20 @@ const {
   DELETED_PROVIDER_PREFIX,
   createProviderStore
 } = require("../public/libs/provider-store.js");
+const {
+  DEFAULT_REFRESH_CONCURRENCY,
+  DEFAULT_REMAINING_PERCENT_BELOW,
+  DEFAULT_STALE_AFTER_MINUTES,
+  MCP_ERROR_CODES,
+  MCP_TOOL_NAMES,
+  createHealthReport,
+  createOverview,
+  createRefreshBatch,
+  meterRemainingPercent,
+  normalizeHealthThresholds,
+  projectProviderDetail,
+  runBoundedTasks
+} = require("../public/libs/quota-mcp.js");
 
 function clone(value) {
   return value === null || value === undefined ? value : JSON.parse(JSON.stringify(value));
@@ -113,6 +128,363 @@ class RevisionDbMock {
 
   failNextRemovals(id, count) {
     this.removeConflicts.set(id, count);
+  }
+}
+
+const MCP_NOW = Date.parse("2026-07-08T10:00:00.000Z");
+
+function mcpProvider(overrides = {}) {
+  return {
+    id: "provider-1",
+    mode: "relay",
+    name: "Provider One",
+    officialPresetId: null,
+    officialPresetName: null,
+    officialPresetAvailable: true,
+    baseUrl: "https://secret.example.com",
+    requestPath: "/private/quota",
+    requestHeaders: '{"Authorization":"Bearer sk-secret"}',
+    requestBody: '{"token":"sk-secret"}',
+    jsonPaths: { balance: "raw.private.balance" },
+    rawResponse: { token: "sk-secret", body: "private upstream body" },
+    hasApiKey: true,
+    showInFloatingWindow: true,
+    lastPrimaryMeterId: "usd-balance",
+    lastMeters: [
+      {
+        id: "usd-balance",
+        label: "USD balance",
+        kind: "balance",
+        remaining: 10,
+        used: 90,
+        limit: 100,
+        unit: "USD",
+        resetAt: "2026-07-09T00:00:00.000Z",
+        aggregate: true
+      },
+      {
+        id: "cny-balance",
+        label: "CNY balance",
+        kind: "balance",
+        remaining: 20,
+        used: null,
+        limit: null,
+        unit: "CNY",
+        resetAt: null,
+        aggregate: true
+      },
+      {
+        id: "requests",
+        label: "Requests",
+        kind: "quota",
+        remaining: 50,
+        used: 50,
+        limit: 100,
+        unit: "Requests",
+        resetAt: null,
+        aggregate: true
+      }
+    ],
+    lastBalance: 10,
+    lastUsed: 90,
+    lastLimit: 100,
+    lastUnit: "USD",
+    lastResetAt: "2026-07-09T00:00:00.000Z",
+    lastIsValid: true,
+    lastCheckedAt: "2026-07-08T09:45:00.000Z",
+    lastError: "",
+    ...overrides
+  };
+}
+
+const safeProviderDetail = projectProviderDetail(
+  mcpProvider({
+    lastError:
+      "URL: https://secret.example.com/private/quota\nBody: {\"token\":\"sk-secret\",\"detail\":\"private upstream body\"}"
+  }),
+  { nowMs: MCP_NOW }
+);
+assert.equal(safeProviderDetail.status, "error");
+assert.equal(safeProviderDetail.error.code, "refresh_failed");
+assert.equal(safeProviderDetail.primaryMeter.id, "usd-balance");
+assert.equal(safeProviderDetail.primaryMeter.remainingPercent, 10);
+const serializedSafeProvider = JSON.stringify(safeProviderDetail);
+for (const forbiddenValue of [
+  "https://secret.example.com",
+  "/private/quota",
+  "sk-secret",
+  "raw.private.balance",
+  "private upstream body"
+]) {
+  assert.equal(serializedSafeProvider.includes(forbiddenValue), false, forbiddenValue);
+}
+for (const forbiddenField of [
+  "baseUrl",
+  "requestPath",
+  "requestHeaders",
+  "requestBody",
+  "jsonPaths",
+  "rawResponse",
+  "apiKey"
+]) {
+  assert.equal(Object.hasOwn(safeProviderDetail, forbiddenField), false, forbiddenField);
+}
+
+assert.equal(meterRemainingPercent({ remaining: null, used: 90, limit: 100 }), 10);
+assert.equal(meterRemainingPercent({ remaining: 1, used: null, limit: null }), null);
+assert.deepEqual(normalizeHealthThresholds({}), {
+  remainingPercentBelow: DEFAULT_REMAINING_PERCENT_BELOW,
+  staleAfterMinutes: DEFAULT_STALE_AFTER_MINUTES
+});
+assert.throws(() => normalizeHealthThresholds({ remainingPercentBelow: -1 }), /remainingPercentBelow/);
+assert.throws(() => normalizeHealthThresholds({ remainingPercentBelow: 101 }), /remainingPercentBelow/);
+assert.throws(() => normalizeHealthThresholds({ staleAfterMinutes: 0 }), /staleAfterMinutes/);
+
+const overviewProjection = createOverview(
+  [
+    mcpProvider(),
+    mcpProvider({
+      id: "provider-2",
+      name: "Provider Two",
+      lastPrimaryMeterId: "eur-quota",
+      lastMeters: [
+        {
+          id: "usd-balance-2",
+          label: "USD balance",
+          kind: "balance",
+          remaining: 2.5,
+          used: null,
+          limit: null,
+          unit: "usd",
+          resetAt: null,
+          aggregate: true
+        },
+        {
+          id: "eur-quota",
+          label: "EUR quota",
+          kind: "quota",
+          remaining: 5,
+          used: 5,
+          limit: 10,
+          unit: "EUR",
+          resetAt: null,
+          aggregate: false
+        }
+      ]
+    })
+  ],
+  { nowMs: MCP_NOW }
+);
+assert.deepEqual(overviewProjection.totalsByUnit, [
+  { unit: "CNY", total: 20 },
+  { unit: "USD", total: 12.5 }
+]);
+assert.equal(overviewProjection.providers[1].primaryMeter.id, "eur-quota");
+assert.equal(overviewProjection.statusCounts.ok, 2);
+
+const healthProviders = [
+  mcpProvider({ id: "missing", name: "Missing", hasApiKey: false, lastCheckedAt: null }),
+  mcpProvider({
+    id: "unavailable",
+    name: "Unavailable",
+    mode: "official",
+    officialPresetId: "retired",
+    officialPresetName: null,
+    officialPresetAvailable: false,
+    lastCheckedAt: null
+  }),
+  mcpProvider({ id: "failed", name: "Failed", lastError: "URL: secret\nBody: secret" }),
+  mcpProvider({ id: "pending", name: "Pending", lastCheckedAt: null }),
+  mcpProvider({ id: "stale", name: "Stale", lastCheckedAt: "2026-07-08T08:00:00.000Z" }),
+  mcpProvider({
+    id: "low",
+    name: "Low",
+    lastMeters: [
+      {
+        id: "low-meter",
+        label: "Low meter",
+        kind: "quota",
+        remaining: 10,
+        used: 90,
+        limit: 100,
+        unit: "Requests",
+        resetAt: null,
+        aggregate: false
+      }
+    ],
+    lastPrimaryMeterId: "low-meter"
+  }),
+  mcpProvider({
+    id: "no-limit",
+    name: "No limit",
+    lastMeters: [
+      {
+        id: "no-limit-meter",
+        label: "No limit meter",
+        kind: "balance",
+        remaining: 1,
+        used: null,
+        limit: null,
+        unit: "USD",
+        resetAt: null,
+        aggregate: false
+      }
+    ],
+    lastPrimaryMeterId: "no-limit-meter"
+  })
+];
+const healthProjection = createHealthReport(healthProviders, {}, { nowMs: MCP_NOW });
+assert.equal(healthProjection.healthy, false);
+assert.deepEqual(
+  [...new Set(healthProjection.issues.map((issue) => issue.code))].sort(),
+  [...MCP_ERROR_CODES].sort()
+);
+assert.equal(
+  healthProjection.issues.some(
+    (issue) => issue.code === "low_remaining" && issue.providerId === "no-limit"
+  ),
+  false
+);
+assert.equal(
+  healthProjection.issues.find((issue) => issue.code === "low_remaining").remainingPercent,
+  10
+);
+const customHealthProjection = createHealthReport(
+  [healthProviders.find((provider) => provider.id === "low")],
+  { remainingPercentBelow: 5, staleAfterMinutes: 180 },
+  { nowMs: MCP_NOW }
+);
+assert.equal(customHealthProjection.healthy, true);
+
+let activeRefreshes = 0;
+let peakRefreshes = 0;
+const progressUpdates = [];
+const boundedResults = await runBoundedTasks(
+  [0, 1, 2, 3, 4, 5, 6],
+  async (item) => {
+    activeRefreshes += 1;
+    peakRefreshes = Math.max(peakRefreshes, activeRefreshes);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 4 + (item % 3)));
+      if (item === 3) {
+        throw new Error("upstream URL and Body must stay internal");
+      }
+      return item * 2;
+    } finally {
+      activeRefreshes -= 1;
+    }
+  },
+  {
+    concurrency: 20,
+    async onProgress(update) {
+      progressUpdates.push({ progress: update.progress, total: update.total });
+      if (update.progress === 2) {
+        throw new Error("progress channel unavailable");
+      }
+    }
+  }
+);
+assert.equal(DEFAULT_REFRESH_CONCURRENCY, 3);
+assert.equal(peakRefreshes, 3);
+assert.equal(boundedResults.length, 7);
+assert.equal(boundedResults.filter((result) => result.fulfilled).length, 6);
+assert.deepEqual(
+  progressUpdates.map((update) => update.progress),
+  [1, 2, 3, 4, 5, 6, 7]
+);
+assert.ok(progressUpdates.every((update) => update.total === 7));
+
+const partialRefreshTasks = await runBoundedTasks(
+  [
+    { id: "success-1", name: "Success 1" },
+    { id: "failure", name: "Failure" },
+    { id: "success-2", name: "Success 2" }
+  ],
+  async (item) => {
+    if (item.id === "failure") {
+      throw new Error("URL: https://private.invalid\nBody: private body");
+    }
+    return mcpProvider({ id: item.id, name: item.name });
+  },
+  { concurrency: 3 }
+);
+const partialRefreshBatch = createRefreshBatch("all", partialRefreshTasks, { nowMs: MCP_NOW });
+assert.equal(partialRefreshBatch.successCount, 2);
+assert.equal(partialRefreshBatch.failureCount, 1);
+assert.equal(partialRefreshBatch.results[1].error.code, "refresh_failed");
+assert.equal(JSON.stringify(partialRefreshBatch).includes("private.invalid"), false);
+
+function assertStrictObjectSchemas(schema, path = "schema") {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
+    return;
+  }
+
+  const types = Array.isArray(schema.type) ? schema.type : [schema.type];
+  if (types.includes("object")) {
+    assert.equal(schema.additionalProperties, false, `${path} must reject additional properties`);
+  }
+  for (const [propertyName, propertySchema] of Object.entries(schema.properties || {})) {
+    assertStrictObjectSchemas(propertySchema, `${path}.properties.${propertyName}`);
+  }
+  for (const [definitionName, definitionSchema] of Object.entries(schema.$defs || {})) {
+    assertStrictObjectSchemas(definitionSchema, `${path}.$defs.${definitionName}`);
+  }
+  if (schema.items) {
+    assertStrictObjectSchemas(schema.items, `${path}.items`);
+  }
+  for (const keyword of ["allOf", "anyOf", "oneOf"]) {
+    for (const [index, childSchema] of (schema[keyword] || []).entries()) {
+      assertStrictObjectSchemas(childSchema, `${path}.${keyword}[${index}]`);
+    }
+  }
+}
+
+function collectSchemaPropertyNames(schema, result = new Set()) {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
+    return result;
+  }
+  for (const [propertyName, propertySchema] of Object.entries(schema.properties || {})) {
+    result.add(propertyName);
+    collectSchemaPropertyNames(propertySchema, result);
+  }
+  for (const definitionSchema of Object.values(schema.$defs || {})) {
+    collectSchemaPropertyNames(definitionSchema, result);
+  }
+  if (schema.items) {
+    collectSchemaPropertyNames(schema.items, result);
+  }
+  for (const keyword of ["allOf", "anyOf", "oneOf"]) {
+    for (const childSchema of schema[keyword] || []) {
+      collectSchemaPropertyNames(childSchema, result);
+    }
+  }
+  return result;
+}
+
+const pluginManifest = JSON.parse(
+  readFileSync(new URL("../public/plugin.json", import.meta.url), "utf8")
+);
+assert.equal(pluginManifest.version, "0.2.0");
+assert.match(pluginManifest.description, /MCP/);
+assert.deepEqual(Object.keys(pluginManifest.tools), MCP_TOOL_NAMES);
+for (const [toolName, definition] of Object.entries(pluginManifest.tools)) {
+  assert.ok(definition.description.length > 0 && definition.description.length <= 500, toolName);
+  assert.equal(definition.inputSchema.type, "object", `${toolName} input schema`);
+  assert.equal(definition.outputSchema.type, "object", `${toolName} output schema`);
+  assertStrictObjectSchemas(definition.inputSchema, `${toolName}.inputSchema`);
+  assertStrictObjectSchemas(definition.outputSchema, `${toolName}.outputSchema`);
+
+  const outputProperties = collectSchemaPropertyNames(definition.outputSchema);
+  for (const forbiddenField of [
+    "apiKey",
+    "baseUrl",
+    "requestPath",
+    "requestHeaders",
+    "requestBody",
+    "jsonPaths",
+    "rawResponse"
+  ]) {
+    assert.equal(outputProperties.has(forbiddenField), false, `${toolName}.${forbiddenField}`);
   }
 }
 
@@ -796,7 +1168,9 @@ let floatingWindowClosed = null;
 let floatingLayoutResponse = { contentHeight: 240, availableHeight: 1000, availableTop: 0 };
 let floatingBounds = { x: 120, y: 720, width: 360, height: 188 };
 let floatingDestroyed = false;
+let floatingCreateCount = 0;
 const floatingWindowCalls = [];
+const registeredTools = new Map();
 const floatingWindowMock = {
   focus() {
     floatingWindowCalls.push(["focus"]);
@@ -849,11 +1223,18 @@ const floatingWindowMock = {
   },
   show() {
     floatingWindowCalls.push(["show"]);
+  },
+  close() {
+    floatingWindowCalls.push(["close"]);
+    floatingDestroyed = true;
+    const closedListener = floatingWindowClosed;
+    floatingWindowClosed = null;
+    closedListener?.();
   }
 };
 const previousWindow = globalThis.window;
 const previousUtools = globalThis.utools;
-globalThis.window = {};
+globalThis.window = { location: { pathname: "/index.html" } };
 globalThis.utools = {
   db: { promises: preloadDb },
   dbCryptoStorage: {
@@ -867,7 +1248,14 @@ globalThis.utools = {
       encryptedValues.delete(key);
     }
   },
+  registerTool(name, handler) {
+    assert.equal(typeof handler, "function");
+    assert.equal(registeredTools.has(name), false, `duplicate registration: ${name}`);
+    registeredTools.set(name, handler);
+  },
   createBrowserWindow(_entry, options, ready) {
+    floatingCreateCount += 1;
+    floatingDestroyed = false;
     floatingWindowOptions = options;
     floatingWindowReady = ready;
     floatingBounds = { ...floatingBounds, width: options.width, height: options.height };
@@ -878,6 +1266,9 @@ globalThis.utools = {
 require("../public/preload.js");
 const preloadBridge = globalThis.window.quotaBridge;
 assert.ok(preloadBridge);
+assert.equal(globalThis.window.__quotaPreloadReady, true);
+assert.equal(globalThis.window.__quotaPreloadError, null);
+assert.deepEqual([...registeredTools.keys()], MCP_TOOL_NAMES);
 assert.ok((await preloadBridge.listOfficialProviderPresets()).length >= 17);
 
 await preloadBridge.openFloatingWindow();
@@ -1041,6 +1432,207 @@ assert.equal(unknownOfficial.officialPresetAvailable, false);
 assert.equal(unknownOfficial.lastMeters[0].remaining, 5);
 assert.equal(unknownOfficial.showInFloatingWindow, true);
 
+const sequenceBeforeSingleFlight = preloadDb.sequence;
+const [singleFlightFirst, singleFlightSecond] = await Promise.all([
+  preloadBridge.refreshProvider("legacy-relay"),
+  preloadBridge.refreshProvider("legacy-relay")
+]);
+assert.equal(singleFlightFirst.lastCheckedAt, singleFlightSecond.lastCheckedAt);
+assert.equal(preloadDb.sequence, sequenceBeforeSingleFlight + 1);
+await preloadBridge.refreshProvider("legacy-relay");
+assert.equal(preloadDb.sequence, sequenceBeforeSingleFlight + 2);
+
+const supportedPlatformsTool = registeredTools.get("quota_supported_platforms");
+const supportedPlatforms = await supportedPlatformsTool({ category: "plan" }, {});
+assert.ok(supportedPlatforms.platformCount > 0);
+assert.ok(supportedPlatforms.platforms.every((platform) => platform.category === "plan"));
+const serializedPlatforms = JSON.stringify(supportedPlatforms);
+assert.equal(serializedPlatforms.includes("https://"), false);
+assert.equal(serializedPlatforms.includes("credentialPlaceholder"), false);
+await assert.rejects(() => supportedPlatformsTool({ category: "unknown" }, {}), /category/);
+
+const refreshTool = registeredTools.get("quota_refresh");
+const sequenceBeforeUnknownSelection = preloadDb.sequence;
+await assert.rejects(
+  () => refreshTool({ scope: "selected", providerIds: ["missing-provider"] }, {}),
+  /未知站点 ID/
+);
+assert.equal(preloadDb.sequence, sequenceBeforeUnknownSelection);
+await assert.rejects(
+  () => refreshTool({ scope: "selected", providerIds: ["legacy-relay", "legacy-relay"] }, {}),
+  /重复站点 ID/
+);
+await assert.rejects(
+  () => refreshTool({ scope: "all", providerIds: ["legacy-relay"] }, {}),
+  /仅在 scope 为 selected/
+);
+
+const detailTool = registeredTools.get("quota_provider_detail");
+const legacyDetail = await detailTool({ providerId: "legacy-relay" }, {});
+assert.equal(legacyDetail.provider.id, "legacy-relay");
+assert.equal(legacyDetail.provider.credentialConfigured, false);
+assert.equal(legacyDetail.provider.error.code, "missing_credential");
+assert.equal(legacyDetail.provider.meters[0].remaining, 66);
+assert.equal(JSON.stringify(legacyDetail).includes("gateway.example.com"), false);
+assert.equal(JSON.stringify(legacyDetail).includes("requestPath"), false);
+
+encryptedValues.delete(`quota-api-key/${savedOfficial.id}`);
+const overviewProgress = [];
+const overviewTool = registeredTools.get("quota_overview");
+const mcpOverview = await overviewTool(
+  {},
+  {
+    async sendProgress(update) {
+      overviewProgress.push(update);
+      if (update.progress === 2) {
+        throw new Error("progress transport unavailable");
+      }
+    }
+  }
+);
+assert.equal(mcpOverview.providerCount, 3);
+assert.equal(mcpOverview.refresh.requestedCount, 3);
+assert.equal(mcpOverview.refresh.failureCount, 3);
+assert.deepEqual(
+  overviewProgress.map((update) => update.progress),
+  [1, 2, 3]
+);
+assert.ok(overviewProgress.every((update) => update.total === 3));
+const serializedOverview = JSON.stringify(mcpOverview);
+assert.equal(serializedOverview.includes("sk-official"), false);
+assert.equal(serializedOverview.includes("gateway.example.com"), false);
+assert.equal(serializedOverview.includes("requestHeaders"), false);
+
+const dueRefresh = await refreshTool({ scope: "due" }, {});
+assert.equal(dueRefresh.scope, "due");
+assert.equal(dueRefresh.requestedCount, 0);
+const selectedRefresh = await refreshTool(
+  { scope: "selected", providerIds: ["legacy-relay"] },
+  {}
+);
+assert.equal(selectedRefresh.scope, "selected");
+assert.equal(selectedRefresh.requestedCount, 1);
+assert.equal(selectedRefresh.failureCount, 1);
+const allRefresh = await refreshTool({ scope: "all" }, {});
+assert.equal(allRefresh.scope, "all");
+assert.equal(allRefresh.requestedCount, 3);
+assert.equal(allRefresh.failureCount, 3);
+
+const healthTool = registeredTools.get("quota_health_check");
+const mcpHealth = await healthTool({}, {});
+assert.deepEqual(mcpHealth.thresholds, {
+  remainingPercentBelow: 20,
+  staleAfterMinutes: 60
+});
+assert.equal(mcpHealth.healthy, false);
+assert.ok(mcpHealth.issues.some((issue) => issue.code === "missing_credential"));
+assert.ok(mcpHealth.issues.some((issue) => issue.code === "preset_unavailable"));
+
+const floatingTool = registeredTools.get("quota_floating_window");
+const visibilityTool = registeredTools.get("quota_set_floating_visibility");
+const createCountBeforeMcpOpen = floatingCreateCount;
+const openedFloatingState = await floatingTool({ action: "open" }, {});
+assert.equal(openedFloatingState.isOpen, true);
+assert.equal(floatingCreateCount, createCountBeforeMcpOpen + 1);
+await floatingWindowReady();
+const syncCallsBeforeVisibility = floatingWindowCalls.filter(
+  (call) => call[0] === "executeJavaScript"
+).length;
+const visibleState = await visibilityTool(
+  { providerId: savedOfficial.id, visible: true },
+  {}
+);
+assert.equal(visibleState.isOpen, true);
+assert.equal(visibleState.provider.providerId, savedOfficial.id);
+assert.equal(visibleState.provider.visible, true);
+assert.equal(
+  (await preloadDb.get(`${PROVIDER_PREFIX}${savedOfficial.id}`)).showInFloatingWindow,
+  true
+);
+assert.ok(
+  floatingWindowCalls.filter((call) => call[0] === "executeJavaScript").length >
+    syncCallsBeforeVisibility
+);
+await assert.rejects(
+  () => visibilityTool({ providerId: "missing-provider", visible: true }, {}),
+  /站点不存在/
+);
+
+const closeCallsBefore = floatingWindowCalls.filter((call) => call[0] === "close").length;
+const closedFloatingState = await floatingTool({ action: "close" }, {});
+assert.equal(closedFloatingState.isOpen, false);
+assert.equal(
+  floatingWindowCalls.filter((call) => call[0] === "close").length,
+  closeCallsBefore + 1
+);
+const repeatedCloseState = await floatingTool({ action: "close" }, {});
+assert.equal(repeatedCloseState.isOpen, false);
+assert.equal(
+  floatingWindowCalls.filter((call) => call[0] === "close").length,
+  closeCallsBefore + 1
+);
+await assert.rejects(() => floatingTool({ action: "toggle" }, {}), /action/);
+await assert.rejects(
+  () => overviewTool({ includeSecrets: true }, {}),
+  /未知字段/
+);
+
+const preloadModulePath = require.resolve("../public/preload.js");
+delete require.cache[preloadModulePath];
+const floatingPreloadRegistrations = [];
+globalThis.window = { location: { pathname: "/dist/floating.html" } };
+globalThis.utools = {
+  db: { promises: new RevisionDbMock() },
+  dbCryptoStorage: {
+    getItem() {
+      return "";
+    },
+    setItem() {},
+    removeItem() {}
+  },
+  registerTool(name) {
+    floatingPreloadRegistrations.push(name);
+  }
+};
+require("../public/preload.js");
+assert.equal(globalThis.window.__quotaPreloadReady, true);
+assert.ok(globalThis.window.quotaBridge);
+assert.deepEqual(floatingPreloadRegistrations, []);
+
+delete require.cache[preloadModulePath];
+const legacyPreloadDb = new RevisionDbMock();
+globalThis.window = { location: { pathname: "/index.html" } };
+globalThis.utools = {
+  db: { promises: legacyPreloadDb },
+  dbCryptoStorage: {
+    getItem() {
+      return "";
+    },
+    setItem() {},
+    removeItem() {}
+  }
+};
+require("../public/preload.js");
+assert.equal(globalThis.window.__quotaPreloadReady, true);
+assert.equal(globalThis.window.__quotaPreloadError, null);
+assert.deepEqual(await globalThis.window.quotaBridge.listProviders(), []);
+
+delete require.cache[preloadModulePath];
+const unavailableApiTools = new Map();
+globalThis.window = { location: { pathname: "/index.html" } };
+globalThis.utools = {
+  registerTool(name, handler) {
+    unavailableApiTools.set(name, handler);
+  }
+};
+require("../public/preload.js");
+assert.equal(globalThis.window.__quotaPreloadReady, true);
+assert.deepEqual([...unavailableApiTools.keys()], MCP_TOOL_NAMES);
+await assert.rejects(
+  () => unavailableApiTools.get("quota_overview")({}, {}),
+  /数据库 API/
+);
+
 if (previousWindow === undefined) {
   delete globalThis.window;
 } else {
@@ -1052,4 +1644,4 @@ if (previousUtools === undefined) {
   globalThis.utools = previousUtools;
 }
 
-console.log("Core quota, official presets, migration, and provider deletion tests passed");
+console.log("Core quota, MCP, official preset, migration, and provider deletion tests passed");
