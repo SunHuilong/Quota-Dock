@@ -6,12 +6,18 @@ const { URL } = require("url");
 const { createResponseErrorMessage, normalizeBodyForJson } = require("./quota-core.js");
 
 function createResponseError(message, detail, sanitize) {
+  let error;
   if (sanitize) {
     const status = detail && detail.statusCode ? `（HTTP ${detail.statusCode}）` : "";
-    return new Error(`${message}${status}`);
+    error = new Error(`${message}${status}`);
+  } else {
+    error = new Error(createResponseErrorMessage(message, detail));
   }
 
-  return new Error(createResponseErrorMessage(message, detail));
+  if (detail && Number.isInteger(detail.statusCode)) {
+    error.statusCode = detail.statusCode;
+  }
+  return error;
 }
 
 function requestJson(config, timeoutMs, options) {

@@ -6,6 +6,8 @@ const {
   firstNumber,
   firstString,
   firstValue,
+  normalizeResetAt,
+  rawAuthorizationHeaders,
   requireNumber,
   simplePreset,
   singleBalanceSnapshot,
@@ -50,7 +52,7 @@ function parseStepFun(response) {
 
 function parseSiliconFlow(response, unit) {
   return singleBalanceSnapshot(response, {
-    paths: ["data.balance", "data.totalBalance", "data.total_balance", "balance"],
+    paths: ["data.totalBalance", "data.total_balance", "data.balance", "balance"],
     unit,
     label: "可用余额"
   });
@@ -66,7 +68,14 @@ function parse302Ai(response) {
 
 function parseNovita(response) {
   return singleBalanceSnapshot(response, {
-    paths: ["data.balance", "balance", "data.available_balance", "available_balance"],
+    paths: [
+      "availableBalance",
+      "data.availableBalance",
+      "data.balance",
+      "balance",
+      "data.available_balance",
+      "available_balance"
+    ],
     unit: "USD",
     multiplier: 1 / 10000,
     label: "可用余额"
@@ -76,10 +85,22 @@ function parseNovita(response) {
 function parseOpenRouterKey(response) {
   const data = response && response.data ? response.data : response;
   const limit = firstNumber(data, ["limit"], "Key 总额度");
-  const used = firstNumber(data, ["usage", "usage_monthly", "usage_daily"], "Key 已用额度");
+  const limitReset = firstString(data, ["limit_reset"], "").toLowerCase();
+  const periodUsagePath = {
+    daily: "usage_daily",
+    weekly: "usage_weekly",
+    monthly: "usage_monthly"
+  }[limitReset];
+  const usedPaths = periodUsagePath
+    ? [periodUsagePath, "usage"]
+    : ["usage", "usage_monthly", "usage_weekly", "usage_daily"];
+  let used = firstNumber(data, usedPaths, "Key 已用额度");
   let remaining = firstNumber(data, ["limit_remaining", "remaining"], "Key 剩余额度");
   if (remaining === null && limit !== null && used !== null) {
     remaining = limit - used;
+  }
+  if (used === null && limit !== null && remaining !== null) {
+    used = limit - remaining;
   }
   if (remaining === null && used === null) {
     throw new Error("OpenRouter 响应缺少 Key 额度信息");
@@ -95,7 +116,7 @@ function parseOpenRouterKey(response) {
         used,
         limit,
         unit: "USD",
-        resetAt: firstString(data, ["reset_at", "limit_reset"], null),
+        resetAt: normalizeResetAt(firstValue(data, ["reset_at", "limit_reset"])),
         aggregate: false
       }
     ]
@@ -176,7 +197,7 @@ const API_PRESETS = [
     name: "Novita AI",
     category: "api",
     defaultUnit: "USD",
-    url: "https://api.novita.ai/v3/user/balance",
+    url: "https://api.novita.ai/openapi/v1/billing/balance/detail",
     parse: parseNovita
   }),
   simplePreset({
@@ -192,7 +213,11 @@ const API_PRESETS = [
     name: "AIHubMix",
     category: "api",
     defaultUnit: "USD",
+    credentialLabel: "System Access Token",
+    credentialPlaceholder: "fd...",
+    credentialHelp: "请使用 fd 开头的 System Access Token，普通 API Key 无法查询账户额度",
     url: "https://aihubmix.com/api/user/self",
+    headers: rawAuthorizationHeaders,
     parse: parseAiHubMix
   })
 ];

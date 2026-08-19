@@ -180,11 +180,11 @@ const ADMIN_PRESETS = [
     parse: parseOpenAiOrganization,
     async execute(context) {
       const headers = bearerHeaders(context.apiKey);
-      const limit = await context.requestJson({
+      const limitPromise = context.requestJson({
         url: "https://api.openai.com/v1/organization/spend_limit",
         method: "GET",
         headers
-      });
+      }).catch(() => null);
       const now = new Date();
       const startTime = Math.floor(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1) / 1000);
       const costPages = [];
@@ -200,6 +200,7 @@ const ADMIN_PRESETS = [
         costPages.push(response);
         page = response && response.has_more && response.next_page ? String(response.next_page) : "";
       } while (page && costPages.length < 100);
+      const limit = await limitPromise;
       return parseOpenAiOrganization({ limit, costPages });
     }
   },
@@ -215,12 +216,13 @@ const ADMIN_PRESETS = [
     async execute(context) {
       const now = new Date();
       const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+      const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
       const pages = [];
       let page = "";
       do {
         const url = new URL("https://api.anthropic.com/v1/organizations/cost_report");
         url.searchParams.set("starting_at", start.toISOString());
-        url.searchParams.set("ending_at", now.toISOString());
+        url.searchParams.set("ending_at", end.toISOString());
         url.searchParams.set("bucket_width", "1d");
         url.searchParams.set("limit", "31");
         if (page) {
@@ -242,6 +244,9 @@ const ADMIN_PRESETS = [
     name: "OpenRouter Account Credits",
     category: "admin",
     defaultUnit: "USD",
+    credentialLabel: "Management Key",
+    credentialPlaceholder: "sk-or-v1-...",
+    credentialHelp: "必须使用 OpenRouter Management Key，普通 API Key 无法查询账户 Credits",
     url: "https://openrouter.ai/api/v1/credits",
     parse: parseOpenRouterCredits
   })

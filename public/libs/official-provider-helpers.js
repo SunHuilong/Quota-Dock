@@ -12,6 +12,14 @@ function bearerHeaders(apiKey, extraHeaders) {
   };
 }
 
+function rawAuthorizationHeaders(apiKey, extraHeaders) {
+  return {
+    ...DEFAULT_HEADERS,
+    Authorization: apiKey,
+    ...(extraHeaders || {})
+  };
+}
+
 function apiKeyHeaders(apiKey, extraHeaders) {
   return {
     ...DEFAULT_HEADERS,
@@ -48,6 +56,23 @@ function firstNumber(source, paths, label) {
 function firstString(source, paths, fallback) {
   const value = firstValue(source, paths);
   return value === null ? fallback : String(value).trim() || fallback;
+}
+
+function normalizeResetAt(value) {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+
+  const text = String(value).trim();
+  if (!text) {
+    return null;
+  }
+
+  const numeric = Number(text);
+  const date = Number.isFinite(numeric)
+    ? new Date(Math.abs(numeric) < 1e12 ? numeric * 1000 : numeric)
+    : new Date(text);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
 function requireNumber(value, label) {
@@ -117,11 +142,13 @@ function simplePreset(definition) {
 
 module.exports = {
   bearerHeaders,
+  rawAuthorizationHeaders,
   apiKeyHeaders,
   numberValue,
   firstValue,
   firstNumber,
   firstString,
+  normalizeResetAt,
   requireNumber,
   asArray,
   slug,

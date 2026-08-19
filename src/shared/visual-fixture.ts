@@ -37,9 +37,9 @@ const PRESETS: OfficialProviderPresetSummary[] = [
     name: "OpenRouter Credits",
     category: "api",
     categoryLabel: "官方 API",
-    credentialLabel: "API Key",
+    credentialLabel: "Management Key",
     credentialPlaceholder: "sk-or-...",
-    credentialHelp: "使用 OpenRouter 账户的 API Key。",
+    credentialHelp: "必须使用 OpenRouter Management Key，普通 API Key 无法查询账户 Credits。",
     defaultUnit: "USD",
     supportsManualLimit: false,
     supportsCurrencyOverride: false
