@@ -1,11 +1,15 @@
 {
   "name": "quota-dock",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Quota Dock - 支持官方 AI API、中转站和 Coding Plan 的余额与额度查询 uTools 插件。",
   "scripts": {
+    "manifest:generate": "node scripts/generate-plugin-manifest.mjs",
+    "manifest:check": "node scripts/generate-plugin-manifest.mjs --check",
+    "prebuild": "npm run manifest:check",
     "build": "vue-tsc --noEmit && vite build",
-    "test": "node scripts/run-tests.mjs && node scripts/run-theme-tests.mjs",
+    "pretest": "npm run manifest:check",
+    "test": "node --test \"scripts/tests/*.test.mjs\"",
     "verify": "npm run test && npm run build"
   },
   "dependencies": {
@@ -14,6 +18,7 @@
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.2.4",
+    "ajv": "^8.20.0",
     "typescript": "^5.4.5",
     "vite": "^6.4.3",
     "vue-tsc": "^2.0.22"

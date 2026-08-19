@@ -1,0 +1,58 @@
+@media (prefers-contrast: more) {
+  :root {
+    --glass: rgba(255, 255, 255, 0.88);
+    --glass-strong: rgba(255, 255, 255, 0.96);
+    --glass-soft: rgba(248, 250, 253, 0.9);
+    --glass-input: rgba(255, 255, 255, 0.96);
+    --glass-edge: rgba(20, 24, 29, 0.78);
+    --glass-edge-soft: rgba(31, 35, 41, 0.56);
+    --line: rgba(31, 35, 41, 0.42);
+    --line-strong: rgba(22, 26, 31, 0.68);
+  }
+
+  .glass-surface,
+.button,
+.icon-button {
+    border-color: var(--line-strong);
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root[data-theme="dark"] {
+    --glass: rgba(21, 24, 29, 0.93);
+    --glass-strong: rgba(30, 34, 40, 0.98);
+    --glass-soft: rgba(25, 29, 35, 0.94);
+    --glass-input: rgba(15, 18, 22, 0.98);
+    --glass-edge: rgba(255, 255, 255, 0.8);
+    --glass-edge-soft: rgba(255, 255, 255, 0.58);
+    --line: rgba(255, 255, 255, 0.42);
+    --line-strong: rgba(255, 255, 255, 0.7);
+  }
+}
+
+@media (forced-colors: active) {
+  .glass-surface,
+.button,
+.icon-button {
+    background: Canvas;
+    border: 1px solid CanvasText;
+    box-shadow: none;
+  }
+
+  .button-primary,
+.button-danger {
+    color: HighlightText;
+    background: Highlight;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+*::before,
+*::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

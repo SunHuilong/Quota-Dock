@@ -57,10 +57,6 @@ function normalizeBaseUrl(rawValue) {
   return parsed.toString().replace(/\/+$/, "");
 }
 
-function buildBalanceUrl(baseUrl) {
-  return `${normalizeBaseUrl(baseUrl)}${BALANCE_ROUTE}`;
-}
-
 function normalizeRequestMethod(value) {
   const method = String(value || REQUEST_METHOD_GET)
     .trim()
@@ -145,9 +141,13 @@ function normalizeDefaultUnit(value) {
 }
 
 function normalizeProviderMode(value) {
-  return String(value || "").trim().toLowerCase() === PROVIDER_MODE_OFFICIAL
-    ? PROVIDER_MODE_OFFICIAL
-    : PROVIDER_MODE_RELAY;
+  const mode = String(value || PROVIDER_MODE_RELAY).trim().toLowerCase();
+
+  if (mode !== PROVIDER_MODE_RELAY && mode !== PROVIDER_MODE_OFFICIAL) {
+    throw new Error("站点模式仅支持 relay 或 official");
+  }
+
+  return mode;
 }
 
 function normalizeCurrencyOverride(value) {
@@ -247,41 +247,6 @@ function normalizeQuotaSnapshot(snapshot, options) {
   };
 }
 
-function quotaSnapshotFromLegacy(provider) {
-  const source = provider || {};
-
-  if (Array.isArray(source.lastMeters) && source.lastMeters.length) {
-    try {
-      return normalizeQuotaSnapshot(
-        {
-          primaryMeterId: source.lastPrimaryMeterId,
-          meters: source.lastMeters
-        },
-        { defaultUnit: source.lastUnit || source.defaultUnit || DEFAULT_UNIT }
-      );
-    } catch {
-      // Fall through to the mirrored legacy fields when synced data is incomplete.
-    }
-  }
-
-  return {
-    primaryMeterId: "balance",
-    meters: [
-      {
-        id: "balance",
-        label: "可用额度",
-        kind: "balance",
-        remaining: nullableFiniteNumber(source.lastBalance),
-        used: nullableFiniteNumber(source.lastUsed),
-        limit: nullableFiniteNumber(source.lastLimit),
-        unit: normalizeDefaultUnit(source.lastUnit || source.defaultUnit || DEFAULT_UNIT),
-        resetAt: source.lastResetAt ? String(source.lastResetAt) : null,
-        aggregate: true
-      }
-    ]
-  };
-}
-
 function getPrimaryQuotaMeter(snapshot) {
   if (!snapshot || !Array.isArray(snapshot.meters) || !snapshot.meters.length) {
     return null;
@@ -290,18 +255,65 @@ function getPrimaryQuotaMeter(snapshot) {
   return snapshot.meters.find((meter) => meter.id === snapshot.primaryMeterId) || snapshot.meters[0];
 }
 
-function quotaSnapshotToLegacyFields(snapshot) {
-  const primary = getPrimaryQuotaMeter(snapshot);
+function meterRemainingPercent(meter) {
+  if (!meter) {
+    return null;
+  }
 
+  const limit = nullableFiniteNumber(meter.limit);
+  if (limit === null || limit <= 0) {
+    return null;
+  }
+
+  const remaining = nullableFiniteNumber(meter.remaining);
+  const used = nullableFiniteNumber(meter.used);
+  const remainingValue = remaining === null && used !== null ? limit - used : remaining;
+
+  if (remainingValue === null) {
+    return null;
+  }
+
+  return Math.max(0, Math.min(100, (remainingValue / limit) * 100));
+}
+
+function projectQuotaMeter(meter, index, fallbackUnit) {
+  const normalized = normalizeQuotaMeter(meter, index, fallbackUnit);
   return {
-    lastPrimaryMeterId: primary ? primary.id : null,
-    lastMeters: snapshot && Array.isArray(snapshot.meters) ? snapshot.meters : [],
-    lastBalance: primary ? primary.remaining : null,
-    lastLimit: primary ? primary.limit : null,
-    lastUsed: primary ? primary.used : null,
-    lastResetAt: primary ? primary.resetAt : null,
-    lastUnit: primary ? primary.unit : null
+    ...normalized,
+    remainingPercent: meterRemainingPercent(normalized)
   };
+}
+
+function projectQuotaSnapshot(snapshot, options) {
+  if (!snapshot) {
+    return null;
+  }
+
+  const normalized = normalizeQuotaSnapshot(snapshot, options);
+  return {
+    primaryMeterId: normalized.primaryMeterId,
+    meters: normalized.meters.map((meter, index) =>
+      projectQuotaMeter(meter, index, options && options.defaultUnit)
+    )
+  };
+}
+
+function getProviderStatus(provider) {
+  const source = provider && typeof provider === "object" ? provider : {};
+
+  if (source.mode === PROVIDER_MODE_OFFICIAL && source.officialPresetAvailable === false) {
+    return "unavailable";
+  }
+  if (!source.hasApiKey) {
+    return "unconfigured";
+  }
+  if (source.lastError) {
+    return "error";
+  }
+  if (!source.lastCheckedAt) {
+    return "pending";
+  }
+  return "ok";
 }
 
 function defaultAdvancedHeaders(authPlacement) {
@@ -379,14 +391,14 @@ function getProviderTemplates() {
   ];
 }
 
-function normalizeTemplateId(value, legacyMode) {
+function normalizeTemplateId(value) {
   const templateId = String(value || "").trim();
 
   if (templateId === TEMPLATE_OPENAI_USAGE || templateId === TEMPLATE_RATE_LIMITS || templateId === TEMPLATE_CUSTOM) {
     return templateId;
   }
 
-  return legacyMode === "advanced" ? TEMPLATE_CUSTOM : DEFAULT_TEMPLATE_ID;
+  return DEFAULT_TEMPLATE_ID;
 }
 
 function getProviderTemplate(templateId) {
@@ -449,7 +461,7 @@ function normalizeProviderInput(input, options) {
   const requireJsonPaths = !options || options.requireJsonPaths !== false;
   const name = String(input && input.name ? input.name : "").trim();
   const apiKey = String(input && input.apiKey ? input.apiKey : "").trim();
-  const templateId = normalizeTemplateId(input && input.templateId, input && input.mode);
+  const templateId = normalizeTemplateId(input && input.templateId);
   const template = getProviderTemplate(templateId);
   const requestMethod = normalizeRequestMethod((input && input.requestMethod) || template.requestMethod);
   const authPlacement = normalizeAuthPlacement((input && input.authPlacement) || template.authPlacement);
@@ -718,7 +730,6 @@ function parseProviderBalanceResponse(response, jsonPaths, manualLimitValue, def
   }
 
   return {
-    isValid: true,
     remaining,
     unit: optionalStringFromPath(response, paths.unit, "单位字段") || normalizeDefaultUnit(defaultUnitValue),
     limit,
@@ -856,7 +867,6 @@ module.exports = {
   getProviderTemplate,
   normalizeTemplateId,
   normalizeBaseUrl,
-  buildBalanceUrl,
   normalizeRequestMethod,
   normalizeAuthPlacement,
   normalizeRequestPath,
@@ -872,9 +882,11 @@ module.exports = {
   normalizeDefaultUnit,
   normalizeQuotaMeter,
   normalizeQuotaSnapshot,
-  quotaSnapshotFromLegacy,
   getPrimaryQuotaMeter,
-  quotaSnapshotToLegacyFields,
+  meterRemainingPercent,
+  projectQuotaMeter,
+  projectQuotaSnapshot,
+  getProviderStatus,
   parseJsonPath,
   getJsonPathValue,
   parseProviderBalanceResponse,

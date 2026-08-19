@@ -1,6 +1,7 @@
 import type {
   OfficialProviderPresetSummary,
   ProviderInput,
+  ProviderTemplate,
   QuotaBridge,
   QuotaMeter,
   QuotaProvider,
@@ -69,6 +70,51 @@ const PRESETS: OfficialProviderPresetSummary[] = [
   }
 ];
 
+const TEMPLATES: ProviderTemplate[] = [
+  {
+    id: "openai-usage",
+    name: "Sub2API - 订阅",
+    requestPath: "/v1/usage",
+    requestMethod: "GET",
+    authPlacement: "header",
+    requestHeaders: '{"Authorization":"Bearer {{token}}","Accept":"application/json"}',
+    requestBody: "",
+    jsonPaths: {
+      balance: "",
+      used: "subscription.daily_usage_usd",
+      limit: "subscription.daily_limit_usd",
+      resetAt: "",
+      unit: ""
+    }
+  },
+  {
+    id: "rate-limits",
+    name: "Sub2API - 刷新限额",
+    requestPath: "/v1/usage",
+    requestMethod: "GET",
+    authPlacement: "header",
+    requestHeaders: '{"Authorization":"Bearer {{token}}","Accept":"application/json"}',
+    requestBody: "",
+    jsonPaths: {
+      balance: "rate_limits[0].remaining",
+      used: "rate_limits[0].used",
+      limit: "rate_limits[0].limit",
+      resetAt: "rate_limits[0].reset_at",
+      unit: ""
+    }
+  },
+  {
+    id: "custom",
+    name: "专业",
+    requestPath: "/v1/usage",
+    requestMethod: "GET",
+    authPlacement: "header",
+    requestHeaders: '{"Authorization":"Bearer {{token}}","Accept":"application/json"}',
+    requestBody: "",
+    jsonPaths: { balance: "", used: "", limit: "", resetAt: "", unit: "" }
+  }
+];
+
 function meter(
   id: string,
   label: string,
@@ -79,7 +125,23 @@ function meter(
   kind: QuotaMeter["kind"] = "quota",
   aggregate = false
 ): QuotaMeter {
-  return { id, label, remaining, used, limit, unit, kind, aggregate, resetAt: limit === null ? null : RESET_AT };
+  const remainingValue = remaining ?? (limit !== null && used !== null ? limit - used : null);
+  const remainingPercent =
+    limit !== null && limit > 0 && remainingValue !== null
+      ? Math.max(0, Math.min(100, (remainingValue / limit) * 100))
+      : null;
+  return {
+    id,
+    label,
+    remaining,
+    used,
+    limit,
+    unit,
+    kind,
+    aggregate,
+    resetAt: limit === null ? null : RESET_AT,
+    remainingPercent
+  };
 }
 
 function provider(overrides: Partial<QuotaProvider> & Pick<QuotaProvider, "id" | "name">): QuotaProvider {
@@ -104,14 +166,11 @@ function provider(overrides: Partial<QuotaProvider> & Pick<QuotaProvider, "id" |
     priceMultiplier: 1,
     refreshIntervalMinutes: 30,
     showInFloatingWindow: true,
-    lastPrimaryMeterId: "primary",
-    lastMeters: [meter("primary", "可用额度", 88.5, 31.5, 120, "CNY", "balance", true)],
-    lastBalance: 88.5,
-    lastLimit: 120,
-    lastUsed: 31.5,
-    lastResetAt: RESET_AT,
-    lastUnit: "CNY",
-    lastIsValid: true,
+    snapshot: {
+      primaryMeterId: "primary",
+      meters: [meter("primary", "可用额度", 88.5, 31.5, 120, "CNY", "balance", true)]
+    },
+    status: "ok",
     lastCheckedAt: CHECKED_AT,
     lastError: "",
     createdAt: "2026-08-01T08:00:00.000Z",
@@ -127,10 +186,13 @@ function createProviders(): QuotaProvider[] {
     provider({
       id: "deepseek",
       name: "DeepSeek 主账户",
-      lastMeters: [
-        meter("primary", "人民币余额", 88.5, 31.5, 120, "CNY", "balance", true),
-        meter("usd", "美元余额", 12.36, null, null, "USD", "balance", true)
-      ]
+      snapshot: {
+        primaryMeterId: "primary",
+        meters: [
+          meter("primary", "人民币余额", 88.5, 31.5, 120, "CNY", "balance", true),
+          meter("usd", "美元余额", 12.36, null, null, "USD", "balance", true)
+        ]
+      }
     }),
     provider({
       id: "glm-plan",
@@ -138,15 +200,13 @@ function createProviders(): QuotaProvider[] {
       officialPresetId: "glm-coding-plan-cn",
       officialPresetName: "智谱 GLM Coding Plan",
       defaultUnit: "Tokens",
-      lastPrimaryMeterId: "tokens",
-      lastMeters: [
-        meter("tokens", "Token 额度", 7500, 2500, 10000, "Tokens"),
-        meter("search", "Web Search", 42, 8, 50, "次")
-      ],
-      lastBalance: 7500,
-      lastLimit: 10000,
-      lastUsed: 2500,
-      lastUnit: "Tokens"
+      snapshot: {
+        primaryMeterId: "tokens",
+        meters: [
+          meter("tokens", "Token 额度", 7500, 2500, 10000, "Tokens"),
+          meter("search", "Web Search", 42, 8, 50, "次")
+        ]
+      }
     }),
     provider({
       id: "relay-error",
@@ -159,29 +219,21 @@ function createProviders(): QuotaProvider[] {
       requestPath: "/v1/usage",
       requestHeaders: '{"Authorization":"Bearer {{token}}"}',
       jsonPaths: { balance: "data.balance", used: "", limit: "", resetAt: "", unit: "data.unit" },
-      lastPrimaryMeterId: "primary",
-      lastMeters: [meter("primary", "账户余额", 6.4, 13.6, 20, "USD", "balance", true)],
-      lastBalance: 6.4,
-      lastLimit: 20,
-      lastUsed: 13.6,
-      lastUnit: "USD",
+      snapshot: {
+        primaryMeterId: "primary",
+        meters: [meter("primary", "账户余额", 6.4, 13.6, 20, "USD", "balance", true)]
+      },
       lastError: "请求超时，请检查网络或服务地址",
-      lastIsValid: false
+      status: "error"
     }),
     provider({
       id: "pending",
       name: "OpenRouter 备用账户",
       officialPresetId: "openrouter-credits",
       officialPresetName: "OpenRouter Credits",
-      lastPrimaryMeterId: null,
-      lastMeters: [],
-      lastBalance: null,
-      lastLimit: null,
-      lastUsed: null,
-      lastResetAt: null,
-      lastUnit: "USD",
+      snapshot: null,
       lastCheckedAt: null,
-      lastIsValid: null
+      status: "pending"
     })
   ];
 }
@@ -283,6 +335,9 @@ export function installVisualFixture(rawScenario: string | null) {
     async listOfficialProviderPresets() {
       return clone(PRESETS);
     },
+    async listProviderTemplates() {
+      return clone(TEMPLATES);
+    },
     async listProviders() {
       if (scenario === "loading") {
         return waitForever<QuotaProvider[]>();
@@ -300,6 +355,7 @@ export function installVisualFixture(rawScenario: string | null) {
       } else {
         providers.push(saved);
       }
+      syncChannel?.postMessage({ type: "providers", providers: clone(providers) } satisfies VisualFixtureMessage);
       return clone(saved);
     },
     async setProviderFloatingVisibility(id, visible) {
@@ -309,6 +365,7 @@ export function installVisualFixture(rawScenario: string | null) {
       }
       current.showInFloatingWindow = visible;
       current.updatedAt = CHECKED_AT;
+      syncChannel?.postMessage({ type: "providers", providers: clone(providers) } satisfies VisualFixtureMessage);
       return clone(current);
     },
     async testProviderRequest() {
@@ -331,6 +388,7 @@ export function installVisualFixture(rawScenario: string | null) {
     },
     async deleteProvider(id) {
       providers = providers.filter((item) => item.id !== id);
+      syncChannel?.postMessage({ type: "providers", providers: clone(providers) } satisfies VisualFixtureMessage);
       return true;
     },
     async refreshProvider(id) {
@@ -340,7 +398,8 @@ export function installVisualFixture(rawScenario: string | null) {
       }
       current.lastCheckedAt = CHECKED_AT;
       current.lastError = "";
-      current.lastIsValid = true;
+      current.status = "ok";
+      syncChannel?.postMessage({ type: "providers", providers: clone(providers) } satisfies VisualFixtureMessage);
       return clone(current);
     },
     async refreshDueProviders() {
@@ -350,13 +409,12 @@ export function installVisualFixture(rawScenario: string | null) {
       if (scenario === "error") {
         throw new Error("视觉测试：浮窗自动刷新失败");
       }
+      syncChannel?.postMessage({ type: "providers", providers: clone(providers) } satisfies VisualFixtureMessage);
       return clone(providers);
     },
     async refreshAll() {
-      return clone(providers);
-    },
-    async syncFloatingWindow() {
       syncChannel?.postMessage({ type: "providers", providers: clone(providers) } satisfies VisualFixtureMessage);
+      return clone(providers);
     },
     async openFloatingWindow() {
       return true;

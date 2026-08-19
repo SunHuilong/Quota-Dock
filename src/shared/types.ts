@@ -5,6 +5,7 @@ export type AuthPlacement = "header" | "body";
 export type JsonPathKey = "balance" | "used" | "limit" | "resetAt" | "unit";
 export type QuotaMeterKind = "balance" | "quota" | "spend";
 export type OfficialProviderCategory = "api" | "plan" | "admin";
+export type ProviderStatus = "ok" | "error" | "unconfigured" | "unavailable" | "pending";
 
 export interface JsonPathMap {
   balance: string;
@@ -23,6 +24,7 @@ export interface QuotaMeter {
   limit: number | null;
   unit: string;
   resetAt: string | null;
+  remainingPercent: number | null;
   aggregate: boolean;
 }
 
@@ -42,6 +44,17 @@ export interface OfficialProviderPresetSummary {
   defaultUnit: string;
   supportsManualLimit: boolean;
   supportsCurrencyOverride: boolean;
+}
+
+export interface ProviderTemplate {
+  id: TemplateId;
+  name: string;
+  requestPath: string;
+  requestMethod: RequestMethod;
+  authPlacement: AuthPlacement;
+  requestHeaders: string;
+  requestBody: string;
+  jsonPaths: JsonPathMap;
 }
 
 export interface QuotaProvider {
@@ -65,14 +78,8 @@ export interface QuotaProvider {
   priceMultiplier: number;
   refreshIntervalMinutes: number;
   showInFloatingWindow: boolean;
-  lastPrimaryMeterId: string | null;
-  lastMeters: QuotaMeter[];
-  lastBalance: number | null;
-  lastLimit: number | null;
-  lastUsed: number | null;
-  lastResetAt: string | null;
-  lastUnit: string | null;
-  lastIsValid: boolean | null;
+  snapshot: QuotaSnapshot | null;
+  status: ProviderStatus;
   lastCheckedAt: string | null;
   lastError: string;
   createdAt: string;
@@ -118,6 +125,7 @@ export interface SyncState {
 
 export interface QuotaBridge {
   getSyncState(): Promise<SyncState>;
+  listProviderTemplates(): Promise<ProviderTemplate[]>;
   listOfficialProviderPresets(): Promise<OfficialProviderPresetSummary[]>;
   listProviders(): Promise<QuotaProvider[]>;
   saveProvider(input: ProviderInput): Promise<QuotaProvider>;
@@ -128,6 +136,5 @@ export interface QuotaBridge {
   refreshProvider(id: string): Promise<QuotaProvider>;
   refreshDueProviders(): Promise<QuotaProvider[]>;
   refreshAll(): Promise<QuotaProvider[]>;
-  syncFloatingWindow(): Promise<void>;
   openFloatingWindow(): Promise<boolean>;
 }

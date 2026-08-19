@@ -1,6 +1,7 @@
 import type {
   OfficialProviderInput,
   OfficialProviderPresetSummary,
+  ProviderTemplate,
   ProviderInput,
   QuotaBridge,
   QuotaProvider,
@@ -34,6 +35,9 @@ function createUnavailableBridge(): QuotaBridge {
     listOfficialProviderPresets(): Promise<OfficialProviderPresetSummary[]> {
       return fail();
     },
+    listProviderTemplates(): Promise<ProviderTemplate[]> {
+      return fail();
+    },
     listProviders(): Promise<QuotaProvider[]> {
       return fail();
     },
@@ -59,9 +63,6 @@ function createUnavailableBridge(): QuotaBridge {
       return fail();
     },
     refreshAll(): Promise<QuotaProvider[]> {
-      return fail();
-    },
-    syncFloatingWindow(): Promise<void> {
       return fail();
     },
     openFloatingWindow(): Promise<boolean> {

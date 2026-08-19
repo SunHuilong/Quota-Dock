@@ -79,7 +79,7 @@ function closeWindow() {
 
 function additionalMeters(provider: QuotaProvider) {
   const primaryId = primaryMeter(provider)?.id;
-  return provider.lastMeters.filter((meter) => meter.id !== primaryId);
+  return (provider.snapshot?.meters || []).filter((meter) => meter.id !== primaryId);
 }
 
 onMounted(async () => {
@@ -151,18 +151,18 @@ onBeforeUnmount(() => {
         </div>
         <div class="floating-balance">
           <strong>{{ formatBalance(provider) }}</strong>
-          <span>{{ primaryMeter(provider)?.unit || provider.lastUnit || provider.defaultUnit || "USD" }}</span>
+          <span>{{ primaryMeter(provider)?.unit || provider.defaultUnit || "USD" }}</span>
         </div>
         <div v-if="quotaProgress(provider) !== null" class="quota-progress floating-quota-progress" aria-label="额度使用进度">
           <div class="quota-progress-text">
-            <span>{{ formatQuotaValue(provider.lastUsed) }} / {{ formatQuotaValue(provider.lastLimit) }}</span>
+            <span>{{ formatQuotaValue(primaryMeter(provider)?.used) }} / {{ formatQuotaValue(primaryMeter(provider)?.limit) }}</span>
             <strong>{{ quotaRemainingPercent(provider)?.toFixed(1) }}%</strong>
           </div>
           <div class="quota-progress-track">
             <span :style="{ width: `${quotaProgress(provider)}%` }"></span>
           </div>
-          <div v-if="provider.lastResetAt" class="quota-reset-row">
-            <span class="quota-reset-text">下次重置 {{ formatDateTime(provider.lastResetAt) }}</span>
+          <div v-if="primaryMeter(provider)?.resetAt" class="quota-reset-row">
+            <span class="quota-reset-text">下次重置 {{ formatDateTime(primaryMeter(provider)?.resetAt || null) }}</span>
           </div>
         </div>
         <div v-if="additionalMeters(provider).length" class="floating-meter-list">

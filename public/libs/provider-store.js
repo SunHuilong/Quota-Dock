@@ -3,6 +3,7 @@
 const PROVIDER_PREFIX = "quota-provider/";
 const DELETED_PROVIDER_PREFIX = "quota-deleted-provider/";
 const REMOVE_RETRY_COUNT = 3;
+const PUT_RETRY_COUNT = 3;
 
 function createProviderStore(getDb) {
   if (typeof getDb !== "function") {
@@ -45,7 +46,19 @@ function createProviderStore(getDb) {
     }
 
     const message = result && result.message ? result.message : `${action}失败`;
-    throw new Error(message);
+    const error = new Error(message);
+    if (result && typeof result === "object") {
+      error.status = result.status || result.statusCode;
+      error.code = result.code || result.error || result.name;
+    }
+    throw error;
+  }
+
+  function isConflictError(error) {
+    const status = Number(error && (error.status || error.statusCode));
+    const code = String((error && (error.name || error.code || error.error)) || "").toLowerCase();
+    const message = String((error && error.message) || "").toLowerCase();
+    return status === 409 || code.includes("conflict") || message.includes("conflict") || message.includes("冲突");
   }
 
   async function getLiveDoc(docId) {
@@ -91,14 +104,52 @@ function createProviderStore(getDb) {
       .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
   }
 
-  async function putProviderPatch(id, patch) {
-    const current = await getProviderDoc(id);
-    const result = await db().put({
+  async function putNewProviderDoc(doc) {
+    const result = await db().put(doc);
+    assertDbResult(result, "保存站点");
+    return getProviderDoc(idFromDoc(doc));
+  }
+
+  async function updateProviderDoc(id, updater) {
+    if (typeof updater !== "function") {
+      throw new TypeError("updater 必须是函数");
+    }
+
+    let lastError = null;
+    for (let attempt = 0; attempt < PUT_RETRY_COUNT; attempt += 1) {
+      const current = await getProviderDoc(id);
+      const next = await updater(current);
+
+      if (next === null || next === undefined) {
+        return current;
+      }
+
+      const doc = {
+        ...next,
+        _id: current._id,
+        _rev: current._rev
+      };
+
+      try {
+        const result = await db().put(doc);
+        assertDbResult(result, "保存站点");
+        return getProviderDoc(id);
+      } catch (error) {
+        lastError = error;
+        if (!isConflictError(error)) {
+          throw error;
+        }
+      }
+    }
+
+    throw lastError || new Error("保存站点失败");
+  }
+
+  function putProviderPatch(id, patch) {
+    return updateProviderDoc(id, (current) => ({
       ...current,
       ...patch
-    });
-    assertDbResult(result, "保存站点");
-    return getProviderDoc(id);
+    }));
   }
 
   async function ensureDeletedMarker(id) {
@@ -172,6 +223,8 @@ function createProviderStore(getDb) {
     idFromDoc,
     getProviderDoc,
     listProviderDocs,
+    putNewProviderDoc,
+    updateProviderDoc,
     putProviderPatch,
     deleteProviderDoc,
     isProviderDeleted

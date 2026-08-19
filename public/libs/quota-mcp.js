@@ -1,5 +1,7 @@
 "use strict";
 
+const { meterRemainingPercent } = require("./quota-core.js");
+
 const MCP_TOOL_NAMES = Object.freeze([
   "quota_overview",
   "quota_provider_detail",
@@ -63,30 +65,6 @@ function safeError(code) {
   };
 }
 
-function meterRemainingPercent(meter) {
-  if (!meter) {
-    return null;
-  }
-
-  const limit = finiteNumberOrNull(meter.limit);
-  if (limit === null || limit <= 0) {
-    return null;
-  }
-
-  const remaining = finiteNumberOrNull(meter.remaining);
-  const used = finiteNumberOrNull(meter.used);
-  let remainingValue = remaining;
-
-  if (remainingValue === null && used !== null) {
-    remainingValue = limit - used;
-  }
-  if (remainingValue === null) {
-    return null;
-  }
-
-  return Math.max(0, Math.min(100, (remainingValue / limit) * 100));
-}
-
 function projectMeter(meter) {
   const source = meter && typeof meter === "object" ? meter : {};
   const kind = source.kind === "quota" || source.kind === "spend" ? source.kind : "balance";
@@ -107,30 +85,9 @@ function projectMeter(meter) {
 
 function providerMeters(provider) {
   const source = provider && typeof provider === "object" ? provider : {};
-  if (Array.isArray(source.lastMeters) && source.lastMeters.length > 0) {
-    return source.lastMeters.map(projectMeter);
-  }
-
-  const hasLegacyMeter = [source.lastBalance, source.lastUsed, source.lastLimit].some(
-    (value) => finiteNumberOrNull(value) !== null
-  );
-  if (!hasLegacyMeter) {
-    return [];
-  }
-
-  return [
-    projectMeter({
-      id: "balance",
-      label: "可用额度",
-      kind: "balance",
-      remaining: source.lastBalance,
-      used: source.lastUsed,
-      limit: source.lastLimit,
-      unit: source.lastUnit || source.defaultUnit,
-      resetAt: source.lastResetAt,
-      aggregate: true
-    })
-  ];
+  return source.snapshot && Array.isArray(source.snapshot.meters)
+    ? source.snapshot.meters.map(projectMeter)
+    : [];
 }
 
 function primaryMeter(provider, meters) {
@@ -138,44 +95,33 @@ function primaryMeter(provider, meters) {
     return null;
   }
 
-  const primaryId = String((provider && provider.lastPrimaryMeterId) || "").trim();
+  const primaryId = String(
+    (provider && provider.snapshot && provider.snapshot.primaryMeterId) || ""
+  ).trim();
   return meters.find((meter) => meter.id === primaryId) || meters[0];
 }
 
 function providerIssueCode(provider) {
   const source = provider && typeof provider === "object" ? provider : {};
 
-  if (source.mode === "official" && source.officialPresetAvailable === false) {
-    return "preset_unavailable";
-  }
-  if (!source.hasApiKey) {
-    return "missing_credential";
-  }
-  if (source.lastError || source.lastIsValid === false) {
-    return "refresh_failed";
-  }
-  if (!isoDateOrNull(source.lastCheckedAt)) {
-    return "not_checked";
-  }
-  return null;
+  return {
+    unavailable: "preset_unavailable",
+    unconfigured: "missing_credential",
+    error: "refresh_failed",
+    pending: "not_checked",
+    ok: null
+  }[source.status] ?? "not_checked";
 }
 
 function providerStatus(provider) {
-  const issueCode = providerIssueCode(provider);
-
-  if (issueCode === "preset_unavailable") {
-    return "unavailable";
-  }
-  if (issueCode === "missing_credential") {
-    return "unconfigured";
-  }
-  if (issueCode === "refresh_failed") {
-    return "error";
-  }
-  if (issueCode === "not_checked") {
-    return "pending";
-  }
-  return "ok";
+  const status = provider && provider.status;
+  return status === "ok" ||
+    status === "error" ||
+    status === "unconfigured" ||
+    status === "unavailable" ||
+    status === "pending"
+    ? status
+    : "pending";
 }
 
 function isProviderStale(provider, staleAfterMinutes, nowMs) {
@@ -478,22 +424,12 @@ function createRefreshBatch(scope, taskResults, options) {
 
 module.exports = {
   MCP_TOOL_NAMES,
-  MCP_ERROR_CODES,
   DEFAULT_REMAINING_PERCENT_BELOW,
   DEFAULT_STALE_AFTER_MINUTES,
   DEFAULT_REFRESH_CONCURRENCY,
-  SAFE_ERROR_MESSAGES,
-  safeError,
-  meterRemainingPercent,
-  projectMeter,
-  providerIssueCode,
-  providerStatus,
-  isProviderStale,
   normalizeHealthThresholds,
   projectProviderSummary,
   projectProviderDetail,
-  sumBalancesByUnit,
-  createStatusCounts,
   createOverview,
   createHealthReport,
   runBoundedTasks,

@@ -1,0 +1,298 @@
+.floating-body {
+  background: transparent;
+}
+
+.floating-header,
+.floating-title,
+.floating-actions,
+.floating-name-row,
+.floating-notice {
+  display: flex;
+  align-items: center;
+}
+
+.floating-logo {
+  display: block;
+  flex: 0 0 auto;
+  object-fit: contain;
+  filter: drop-shadow(0 5px 9px rgba(33, 72, 130, 0.22));
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .floating-item:hover {
+    background: linear-gradient(145deg, var(--glass-strong), var(--glass-soft));
+    border-color: var(--glass-edge);
+    box-shadow:
+      inset 0 1px 0 var(--glass-edge),
+      inset 0 -1px 0 rgba(255, 255, 255, 0.1);
+  }
+}
+
+.floating-shell {
+  --glass-pointer-radius: 80px;
+  --glass-clip-radius: var(--radius-window);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+  padding: 10px;
+  color: var(--text);
+  background:
+    radial-gradient(circle at 78% 4%, rgba(255, 255, 255, 0.3), transparent 34%),
+    linear-gradient(145deg, var(--glass-strong), var(--glass));
+  border-color: var(--glass-edge);
+  border-radius: var(--glass-clip-radius);
+  -webkit-clip-path: inset(0 round var(--glass-clip-radius));
+  clip-path: inset(0 round var(--glass-clip-radius));
+  box-shadow:
+    inset 0 1px 0 var(--glass-edge),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.1);
+}
+
+.floating-shell::before {
+  z-index: 0;
+  transform: translate(var(--glass-shift-x), var(--glass-shift-y));
+}
+
+.floating-shell > * {
+  position: relative;
+  z-index: 1;
+}
+
+.floating-header {
+  flex: 0 0 auto;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 2px;
+  -webkit-app-region: drag;
+}
+
+.floating-title {
+  gap: 8px;
+  min-width: 0;
+}
+
+.floating-logo {
+  width: 32px;
+  height: 32px;
+}
+
+.floating-title > div {
+  display: grid;
+  min-width: 0;
+}
+
+.floating-title strong {
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 12.5px;
+  font-weight: 720;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.floating-title span {
+  color: var(--muted);
+  font-size: 9.5px;
+  font-weight: 610;
+}
+
+.floating-actions {
+  gap: 5px;
+}
+
+.no-drag,
+.floating-actions button {
+  -webkit-app-region: no-drag;
+}
+
+.icon-button.compact {
+  width: 30px;
+  height: 30px;
+  border-radius: 10px;
+}
+
+.floating-notice {
+  flex: 0 0 auto;
+  gap: 6px;
+  padding: 7px 8px;
+  color: var(--red);
+  font-size: 10.5px;
+  line-height: 1.35;
+  background: var(--red-soft);
+  border: 1px solid rgba(197, 48, 48, 0.22);
+  border-radius: 10px;
+}
+
+.floating-notice svg {
+  flex: 0 0 auto;
+}
+
+.floating-empty {
+  display: grid;
+  flex: 1 1 auto;
+  place-items: center;
+  align-content: center;
+  min-height: 0;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.floating-list {
+  display: grid;
+  grid-auto-rows: max-content;
+  align-items: start;
+  align-content: start;
+  gap: 7px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 1px 2px 2px 0;
+  scrollbar-gutter: stable;
+}
+
+.floating-item {
+  --glass-clip-radius: 14px;
+  display: grid;
+  align-self: start;
+  align-content: start;
+  height: max-content;
+  min-width: 0;
+  gap: 6px;
+  padding: 10px;
+  background: linear-gradient(145deg, var(--glass), var(--glass-soft));
+  border-radius: var(--glass-clip-radius);
+  box-shadow: inset 0 1px 0 var(--glass-edge);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.floating-item > div {
+  min-width: 0;
+}
+
+.floating-name-row {
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.floating-name-row > strong {
+  overflow: hidden;
+  min-width: 0;
+  color: var(--text-strong);
+  font-size: 11.5px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dot-status {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+  font-size: 9.5px;
+  font-weight: 680;
+}
+
+.floating-balance {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 6px;
+  text-align: right;
+}
+
+.floating-balance strong {
+  overflow-wrap: anywhere;
+  color: var(--text-strong);
+  font-size: 22px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 720;
+  line-height: 1.06;
+}
+
+.floating-balance span,
+.floating-item > small {
+  color: var(--muted);
+  font-size: 9.5px;
+  font-weight: 610;
+}
+
+.floating-quota-progress {
+  gap: 4px;
+  margin-top: 0;
+}
+
+.floating-item > small {
+  min-width: 0;
+}
+
+.floating-error {
+  color: var(--red);
+  font-size: 10px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.floating-meter-list {
+  display: grid;
+  gap: 5px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+
+.floating-meter {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 3px 7px;
+  min-width: 0;
+}
+
+.floating-meter > span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9.5px;
+  font-weight: 610;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.floating-meter > strong {
+  color: var(--text);
+  font-size: 9.5px;
+  white-space: nowrap;
+}
+
+.floating-meter .quota-progress-track,
+.floating-meter > small {
+  grid-column: 1 / -1;
+}
+
+.floating-meter .quota-progress-track {
+  height: 4px;
+}
+
+.floating-meter > small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+@supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  .floating-shell {
+    background: var(--glass-strong);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .floating-item:hover {
+    transform: none;
+  }
+}

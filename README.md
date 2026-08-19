@@ -130,7 +130,8 @@ MCP 查询结果经过脱敏，不包含 API Key、请求 URL、请求配置或�
 ## 数据与安全
 
 - API Key 使用 uTools `dbCryptoStorage` 保存，不写入普通站点配置文档。
-- 站点配置与最近一次额度快照保存在 uTools 数据库中。
+- 站点配置与最近一次额度快照保存在 uTools 数据库中；当前持久化格式为 `schemaVersion: 2`，额度数据只写入 `snapshot`。
+- 旧版标量额度字段和 `lastMeters` 会在读取边界兼容，并在该站点下一次写入时惰性迁移，不会在启动时批量改写数据库。
 - 删除站点时会同时清理对应凭证，并保留删除标记以处理云端旧数据回流。
 - 额度请求由插件直接发送到官方平台或用户配置的服务地址。
 - MCP 输出只暴露额度状态所需的脱敏字段。
@@ -141,9 +142,13 @@ MCP 查询结果经过脱敏，不包含 API Key、请求 URL、请求配置或�
 
 | 命令 | 说明 |
 | --- | --- |
-| `npm run test` | 运行额度核心、MCP、官方预设、数据迁移、删除流程和主题测试 |
+| `npm run manifest:generate` | 根据 `package.json` 版本和共享 Schema 片段生成 `public/plugin.json` |
+| `npm run manifest:check` | 检查插件清单是否与生成器、共享 Schema 及项目版本一致 |
+| `npm run test` | 使用 Node 内置测试运行器执行 core、migration、store、presets、MCP、preload、theme 七组测试 |
 | `npm run build` | 执行 TypeScript 类型检查并构建主面板与浮窗 |
-| `npm run verify` | 依次运行全部测试和生产构建 |
+| `npm run verify` | 校验 Manifest，运行全部测试，并完成 TypeScript 检查与生产构建 |
+
+`public/plugin.json` 是受管生成物。修改 MCP 工具 Schema 时，请编辑 `scripts/mcp-schema-fragments.mjs` 或 Manifest 生成器，再执行 `npm run manifest:generate`。
 
 ## 技术栈
 
@@ -151,6 +156,8 @@ MCP 查询结果经过脱敏，不包含 API Key、请求 URL、请求配置或�
 - TypeScript
 - Vite 6
 - Lucide Vue
+- Ajv 8（开发期 MCP Schema 验证）
+- Node.js 内置测试运行器
 - uTools preload、数据库、加密存储、窗口与 MCP API
 
 ## 项目结构
@@ -158,15 +165,25 @@ MCP 查询结果经过脱敏，不包含 API Key、请求 URL、请求配置或�
 ```text
 Quota-Dock/
 ├─ public/
-│  ├─ libs/                 # 额度核心、平台预设、数据存储与 MCP 逻辑
-│  ├─ plugin.json           # uTools 插件清单及 MCP Schema
-│  └─ preload.js            # uTools API 桥接与浮窗管理
-├─ scripts/                 # 自动化测试脚本
+│  ├─ libs/
+│  │  ├─ quota-core.js      # 额度模型、模板、解析与领域投影
+│  │  ├─ provider-document.js # v0/v1 解码与 v2 文档编码
+│  │  ├─ provider-store.js  # 数据库访问、删除标记与 revision 重试
+│  │  ├─ quota-service.js   # 额度刷新、凭证和数据变更编排
+│  │  ├─ official-provider-*.js # 按 api、plan、admin 分类的平台预设
+│  │  └─ *-controller.js / *-handlers.js # HTTP、浮窗和 MCP 边界
+│  ├─ plugin.json           # 由脚本生成的 uTools 清单及 MCP Schema
+│  └─ preload.js            # 只负责组装服务并暴露桥接
+├─ resources/brand/         # 品牌源文件，不进入运行时图标引用
+├─ scripts/
+│  ├─ generate-plugin-manifest.mjs # Manifest 生成与过期检查
+│  ├─ mcp-schema-fragments.mjs     # MCP 共享 Schema 片段
+│  └─ tests/                # 七组 Node 测试与本地模拟工具
 ├─ src/
 │  ├─ floating/             # 桌面浮窗入口
-│  ├─ renderer/             # 主看板入口
+│  ├─ renderer/             # 主看板编排与站点卡片、编辑器等组件
 │  ├─ shared/               # 类型、格式化、主题和桥接代码
-│  └─ styles/               # 全局样式
+│  └─ styles/               # 基础、主面板、编辑器、浮窗和可访问性样式
 ├─ floating.html            # 浮窗构建入口
 ├─ index.html               # 主面板构建入口
 └─ vite.config.mts          # Vite 多入口构建配置

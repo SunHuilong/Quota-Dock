@@ -1,28 +1,13 @@
 import type { QuotaMeter, QuotaProvider } from "./types";
 
 export function primaryMeter(provider: QuotaProvider): QuotaMeter | null {
-  if (provider.lastMeters.length) {
-    return (
-      provider.lastMeters.find((meter) => meter.id === provider.lastPrimaryMeterId) ||
-      provider.lastMeters[0]
-    );
-  }
-
-  if (provider.lastBalance === null && provider.lastUsed === null && provider.lastLimit === null) {
+  if (!provider.snapshot?.meters.length) {
     return null;
   }
-
-  return {
-    id: "balance",
-    label: "可用额度",
-    kind: "balance",
-    remaining: provider.lastBalance,
-    used: provider.lastUsed,
-    limit: provider.lastLimit,
-    unit: provider.lastUnit || provider.defaultUnit || "USD",
-    resetAt: provider.lastResetAt,
-    aggregate: true
-  };
+  return (
+    provider.snapshot.meters.find((meter) => meter.id === provider.snapshot?.primaryMeterId) ||
+    provider.snapshot.meters[0]
+  );
 }
 
 export function meterDisplayValue(meter: QuotaMeter | null): number | null {
@@ -86,21 +71,13 @@ export function formatQuotaValue(value: number | null | undefined): string {
 }
 
 export function meterProgress(meter: QuotaMeter | null): number | null {
-  if (!meter || meter.limit === null || meter.limit <= 0) {
-    return null;
-  }
-
-  const used = meter.used ?? (meter.remaining === null ? null : Math.max(0, meter.limit - meter.remaining));
-  if (used === null) {
-    return null;
-  }
-
-  return Math.max(0, Math.min(100, (used / meter.limit) * 100));
+  return meter?.remainingPercent === null || meter?.remainingPercent === undefined
+    ? null
+    : 100 - meter.remainingPercent;
 }
 
 export function meterRemainingPercent(meter: QuotaMeter | null): number | null {
-  const usedPercent = meterProgress(meter);
-  return usedPercent === null ? null : 100 - usedPercent;
+  return meter?.remainingPercent ?? null;
 }
 
 export function quotaProgress(provider: QuotaProvider): number | null {
@@ -111,33 +88,14 @@ export function quotaRemainingPercent(provider: QuotaProvider): number | null {
   return meterRemainingPercent(primaryMeter(provider));
 }
 
-export function formatDomain(baseUrl: string): string {
-  try {
-    const url = new URL(baseUrl);
-    return url.host + url.pathname.replace(/\/+$/, "");
-  } catch {
-    return baseUrl;
-  }
-}
-
 export function providerStatus(provider: QuotaProvider): { text: string; tone: "ok" | "warn" | "error" | "idle" } {
-  if (provider.mode === "official" && !provider.officialPresetAvailable) {
-    return { text: "预设不可用", tone: "error" };
-  }
-
-  if (provider.lastError) {
-    return { text: "异常", tone: "error" };
-  }
-
-  if (provider.lastIsValid === false) {
-    return { text: "停用", tone: "warn" };
-  }
-
-  if (provider.lastCheckedAt) {
-    return { text: "可用", tone: "ok" };
-  }
-
-  return { text: "待查询", tone: "idle" };
+  return ({
+    ok: { text: "可用", tone: "ok" },
+    error: { text: "异常", tone: "error" },
+    unconfigured: { text: "未配置", tone: "warn" },
+    unavailable: { text: "预设不可用", tone: "error" },
+    pending: { text: "待查询", tone: "idle" }
+  } as const)[provider.status];
 }
 
 export interface BalanceTotal {
@@ -149,7 +107,7 @@ export function sumBalancesByUnit(providers: QuotaProvider[]): BalanceTotal[] {
   const totals = new Map<string, number>();
 
   for (const provider of providers) {
-    for (const meter of provider.lastMeters) {
+    for (const meter of provider.snapshot?.meters || []) {
       if (meter.kind !== "balance" || !meter.aggregate || meter.remaining === null) {
         continue;
       }
@@ -161,8 +119,4 @@ export function sumBalancesByUnit(providers: QuotaProvider[]): BalanceTotal[] {
   return [...totals.entries()]
     .map(([unit, total]) => ({ unit, total }))
     .sort((a, b) => a.unit.localeCompare(b.unit));
-}
-
-export function sumBalance(providers: QuotaProvider[]): number {
-  return sumBalancesByUnit(providers).reduce((sum, item) => sum + item.total, 0);
 }

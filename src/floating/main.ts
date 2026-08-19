@@ -1,6 +1,6 @@
 import { createApp } from "vue";
 import { initializeTheme } from "../shared/theme";
-import "../styles/app.css";
+import "../styles/floating-entry.css";
 
 initializeTheme();
 
